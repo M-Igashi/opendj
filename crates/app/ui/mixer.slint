@@ -382,14 +382,16 @@ component ColorFxArrow inherits Rectangle {
     in property <int> deck;
     // Beside the knob on its left: the list opens leftwards.
     in property <bool> left;
+    // false: just the triangle, with no box round it (2-Deck's slim mixer).
+    in property <bool> boxed: true;
     property <int> index: Controls.resolve("[QuickEffectRack1_[Channel" + (deck + 1) + "]]", "loaded_chain_preset");
     property <int> cfx: Controls.value(index, Controls.tick);
-    width: 12px;
+    width: boxed ? 12px : 8px;
     height: 12px;
     border-radius: 2px;
-    border-width: 1px;
+    border-width: boxed ? 1px : 0px;
     border-color: ta.has-hover ? Theme.text-dim : Theme.border;
-    background: ta.pressed ? Theme.control-pressed : ta.has-hover ? Theme.n-2a2a2e : Theme.control;
+    background: !boxed ? transparent : ta.pressed ? Theme.control-pressed : ta.has-hover ? Theme.n-2a2a2e : Theme.control;
     Path {
         width: 6px;
         height: 4px;
@@ -467,6 +469,9 @@ export component SideKnob inherits Rectangle {
     // The Color FX ▾ beside the filter knob goes on its left: the inner
     // side for the right-hand deck.
     in property <bool> cfx-arrow-left: deck == 1;
+    // The ▾ without its box, and how far up from the knob's middle.
+    in property <bool> cfx-boxed: true;
+    in property <length> cfx-raise: 0px;
     property <string> ch: "[Channel" + (deck + 1) + "]";
     property <string> eq: "[EqualizerRack1_" + ch + "_Effect1]";
     property <string> sculpt: "[Sculpt_" + ch + "]";
@@ -509,8 +514,9 @@ export component SideKnob inherits Rectangle {
     if mode == 0 && place == 3: ColorFxArrow {
         deck: deck;
         left: cfx-arrow-left;
+        boxed: cfx-boxed;
         x: cfx-arrow-left ? (parent.width - size) / 2 - self.width - 1px : (parent.width + size) / 2 + 1px;
-        y: (size + 6px - self.height) / 2;
+        y: (size + 6px - self.height) / 2 - cfx-raise;
     }
 }
 

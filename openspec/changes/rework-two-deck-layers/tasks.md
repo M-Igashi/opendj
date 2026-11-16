@@ -3,7 +3,7 @@
 ## 1. Three layers
 
 - [ ] 1.1 2-Deck uses the three layers: row 1 (LOOP, CUE, PLAY, mini jog), tempo columns on the mixer's outer edges with SYNC at the foot, the header's elapsed time, PADS and JOG in 2-Deck, PADS and FX off by default; screenshots
-- [ ] 1.2 X-Y Beat FX pad under the mixer in the pads layer; the FX bar's Beat FX as wide as the mixer
+- [ ] 1.2 Beat FX under the mixer in the pads layer; an X-Y pad per deck in the FX bar's middle
 - [ ] 1.3 Live decks (Groove Box, instrument, looper) and an external mixer in the new 2-Deck; checked on screen
 
 ## 2. Clean-up

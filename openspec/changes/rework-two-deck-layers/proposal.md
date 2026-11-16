@@ -14,7 +14,7 @@ One 2-Deck layout built from three fixed layers, with no tabs between them:
 
 1. **Row 1, always shown.** Each deck's header shows the time left large and the time elapsed small and grey under it, then the key. Under the header, from the outer edge in: LOOP ‹ n ›, CUE, PLAY and a mini jog: a dark disc with one line that turns with the playhead, nothing written in it.
 2. **Tempo in the mixer.** The mixer is exactly as tall as row 1. Each deck's tempo column runs down the mixer's outer edge, next to that deck's jog: the live BPM and tempo % (which opens the tempo panel) on top, the tempo fader the full height under them, SYNC at the foot.
-3. **Layer 2, the PADS button:** each deck's eight pads with their page tabs, full width under the deck, and an X-Y pad for the Beat FX under the mixer: pressing turns the Beat FX on, across sets its length in beats, up and down its D/W, and letting go turns it off again.
+3. **Layer 2, the PADS button:** each deck's eight pads with their page tabs, full width under the deck, and the Beat FX under the mixer. The FX bar (layer 3) gets an X-Y pad per deck in its middle: pressing turns that deck's chosen effect on, across sets its length in beats, up and down its D/W, and letting go turns it off again.
 4. **Layer 3, the FX button:** the FX bar as today, its Beat FX as wide as the mixer above.
 5. **JOG** swaps the mini jogs for big ones on the inner side of each header, as tall as the cover art.
 6. PADS and FX are off for a new DJ, and the layers shown are saved.
@@ -37,7 +37,7 @@ A deck holding a Groove Box, an instrument or the looper shows its full panel as
 
 ## Impact
 
-`crates/app/ui` lite.slint (row 1, MixerTempo, XyFxPad, LiteJog in the header), main.slint (the 2-Deck block, top-bar buttons), deck.slint (elapsed under the time), fxbar.slint (Beat FX width); `crates/app/src` main.rs (PADS and FX off by default), layouts.rs (2-Deck Basic left out). The old 2-Deck deck (`Deck` with Pitch, pads, loop column and JogSection) stays for live decks and 4-Deck's fallback.
+`crates/app/ui` lite.slint (row 1, MixerTempo, LiteJog in the header), main.slint (the 2-Deck block, top-bar buttons), deck.slint (elapsed under the time), fxbar.slint (XyFxPad, Beat FX width); `crates/app/src` main.rs (PADS and FX off by default), layouts.rs (2-Deck Basic left out). The old 2-Deck deck (`Deck` with Pitch, pads, loop column and JogSection) stays for live decks and 4-Deck's fallback.
 
 ## Difficulty
 

@@ -24,8 +24,8 @@ import { ChecklistUi } from "checklist.slint";
 import { LyricsUi, WaveLyrics, LyricsLane, WaveLine } from "lyrics.slint";
 import { NowPlayingUi } from "nowplaying.slint";
 import { DeckStrip, FourDeckBar } from "fourdeck.slint";
-import { LiteDeck, LiteMixer, LiteUi, MixerTempo, PadBarHalf, XyFxPad } from "lite.slint";
-import { FxBar } from "fxbar.slint";
+import { LiteDeck, LiteMixer, LiteUi, MixerTempo, PadBarHalf } from "lite.slint";
+import { BeatFxSection, FxBar } from "fxbar.slint";
 import { InstrumentsUi, LiveItem, ParamMatch, PresetItem, PresetUi } from "instruments.slint";
 import { Browser, Folder, TrackRow, SideRow, SideTab, SideTabs, RailOrder, DragGrip, TrackDrag, LibraryEdit, KeepGoingUi, UpNextUi, MenuListRow, MenuTag, StoreUi, StreamMatch, WantedUi, FilesUi, AlbumsUi, AlbumTile, ColumnUi, ListColumn, HealthUi, HealthCard, HealthStage, HealthLine, HealthArea, HealthChip, HealthReview, CleanupUi, CleanupRow, FixNamesUi, GenreRow, BuyUi, BuyGroup, BuyRow } from "library.slint";
 import { Preferences, PreferencesOverlay, PrefItem, ImportWizard, PluginErrors, StorageUi, StoragePart } from "preferences.slint";
@@ -2159,7 +2159,7 @@ export component AppWindow inherits Window {
                         spacing: 1px;
                         height: LiteUi.bar-height;
                         PadBarHalf { deck: 0; info: decks[0]; min-width: 400px; preferred-width: 400px; }
-                        XyFxPad { width: lite-full-a || lite-full-b ? 254px : LiteUi.centre-width; }
+                        BeatFxSection { width: lite-full-a || lite-full-b ? 254px : LiteUi.centre-width; }
                         PadBarHalf { deck: 1; info: decks[1]; mirrored: true; min-width: 400px; preferred-width: 400px; }
                     }
                 }
@@ -2213,6 +2213,7 @@ export component AppWindow inherits Window {
             FxBar {
                 four: four;
                 centre: lite && !(lite-full-a || lite-full-b) ? LiteUi.centre-width : 254px;
+                xy: lite;
                 height: library-expanded || !fx-bar-visible || player || prep ? 0px : four ? 96px : 68px;
                 visible: !library-expanded && fx-bar-visible && !player && !prep;
             }
