@@ -555,9 +555,11 @@ component DeckCover inherits TouchArea {
     in property <int> live;
     in property <bool> mirrored;
     in property <bool> compact;
+    // 2-Deck's 100 pt header: a slightly smaller cover.
+    in property <bool> slim;
     in property <bool> occupied;
     in property <bool> playing;
-    width: compact ? 40px : 96px;
+    width: compact ? 40px : slim ? 88px : 96px;
     height: self.width;
     property <bool> badge: occupied && !playing && root.has-hover;
     // The badge's tooltip is up: it goes with the badge, however that goes.
@@ -829,7 +831,7 @@ component TimeKey inherits HorizontalLayout {
         // Elapsed under the time left: small and grey, so the two
         // clocks don't read alike.
         property <int> secs: floor(info.progress * info.duration);
-        Text { text: info.loaded ? "+" + floor(secs / 60) + ":" + (Math.mod(secs, 60) < 10 ? "0" : "") + Math.mod(secs, 60) : ""; color: Theme.text-dim; font-size: 11px; horizontal-alignment: right; }
+        Text { text: info.loaded ? "+" + floor(secs / 60) + ":" + (Math.mod(secs, 60) < 10 ? "0" : "") + Math.mod(secs, 60) : ""; color: Theme.text-dim; font-size: 9.5px; horizontal-alignment: right; }
     }
     if show-time: EdgeVLine { top: 6px; bottom: 6px; line-color: Theme.n-2c2c2f; }
     KeyBox { group: group; info: info; tint: tint; compact: !show-time; }
@@ -1269,6 +1271,8 @@ export component Header inherits Rectangle {
     // The 4-Deck strips' header: the deck number, a small cover, smaller
     // type, and the time beside the overview.
     in property <bool> compact: false;
+    // 2-Deck: 100 pt tall with an 88 pt cover.
+    in property <bool> slim: false;
     // The deck number lit: a two-deck controller's side is on this deck.
     in property <bool> number-lit: false;
     // The beat and phrase counter; 2-Deck Basic leaves it out.
@@ -1344,7 +1348,7 @@ export component Header inherits Rectangle {
     // The header's fixed height. A deck that hides the header sets its own
     // height from this, never from preferred-height: that follows the
     // overview image's pixel size, so the header grew with each render.
-    out property <length> fixed-height: compact ? 92px : 108px;
+    out property <length> fixed-height: compact ? 92px : slim ? 100px : 108px;
     height: fixed-height;
     // Cover, title, info and overview share one black box.
     background: Theme.well;
@@ -1367,7 +1371,7 @@ export component Header inherits Rectangle {
         }
         if !mirrored: VerticalLayout {
             alignment: start;
-            DeckCover { deck: deck; tint: tint; info: info; live: live; mirrored: mirrored; compact: compact; occupied: occupied; playing: playing; }
+            DeckCover { deck: deck; tint: tint; info: info; live: live; mirrored: mirrored; compact: compact; slim: slim; occupied: occupied; playing: playing; }
         }
         VerticalLayout {
             spacing: 4px;
@@ -1559,7 +1563,7 @@ export component Header inherits Rectangle {
         }
         if mirrored: VerticalLayout {
             alignment: start;
-            DeckCover { deck: deck; tint: tint; info: info; live: live; mirrored: mirrored; compact: compact; occupied: occupied; playing: playing; }
+            DeckCover { deck: deck; tint: tint; info: info; live: live; mirrored: mirrored; compact: compact; slim: slim; occupied: occupied; playing: playing; }
         }
     }
 }
