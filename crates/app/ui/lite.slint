@@ -1,13 +1,13 @@
-// 2-Deck Basic: the lighter two-deck layout. No jogs and no tempo faders: each
-// deck is its header over one row with SYNC, the tempo, PLAY and CUE,
-// beside a slim mixer. The pads and the loop sit in a bar under the decks
-// that the PADS button shows (PadBarHalf), with the mixer running down
-// between its halves. A deck holding a Groove Box or an
-// instrument shows the full deck instead (see main.slint), as in
-// 2-Deck.
+// 2-Deck in three layers. Row 1, always shown: each deck's header over one
+// row with LOOP, CUE, PLAY and a mini jog, either side of the slim mixer,
+// whose outer edges carry each deck's tempo (MixerTempo). Layer 2, the PADS
+// button: each deck's pads (PadBarHalf) with an X-Y FX pad under the mixer
+// (XyFxPad). Layer 3, the FX button: the FX bar (fxbar.slint). A deck
+// holding a Groove Box or an instrument shows the full deck instead (see
+// main.slint).
 import { Theme } from "theme.slint";
 import { ControlButton, ControlFader, Controls, Crossfader, CueHeadphones, StereoMeter, SyncButton } from "controls.slint";
-import { DeckInfo, Header, Jog, LoopSection, Pads, PlayButton, TempoPanelMenu } from "deck.slint";
+import { DeckInfo, Header, Jog, LoopStepper, Pads, PlayButton, TempoPanelMenu } from "deck.slint";
 import { Knob, ModeMenu, SideKnob } from "mixer.slint";
 import { TrackDrag } from "library.slint";
 import { InstrumentsUi } from "instruments.slint";
@@ -16,36 +16,18 @@ import { InstrumentsUi } from "instruments.slint";
 export global LiteUi {
     out property <length> deck-height: 176px;
     out property <length> bar-height: 104px;
-    // JOG on the top bar: a jog on the mixer side of each deck, the full
-    // height of the deck, with the header and overview narrower beside it.
+    // JOG on the top bar: a big jog on the inner side of each deck's header,
+    // as tall as the cover, in place of the mini jog in row 1.
     in-out property <bool> jogs: false;
+    // Each deck's tempo column on the mixer's outer edges (MixerTempo).
+    out property <length> tempo-width: 62px;
+    // The mixer with its two tempo columns, for the X-Y pad and the Beat FX
+    // under it: 254px + 2 × (tempo-width + 1px).
+    out property <length> centre-width: 254px + 2 * (tempo-width + 1px);
 }
 
-// SYNC and the BPM with its tempo panel (TempoPanelMenu), nothing else, as on
-// djay. Deck B is the mirror image.
-component LiteTempo inherits HorizontalLayout {
-    in property <string> group;
-    in property <DeckInfo> info;
-    in property <color> tint;
-    in property <bool> mirrored;
-    spacing: 10px;
-    alignment: start;
-    if mirrored: VerticalLayout {
-        width: 64px;
-        alignment: center;
-        Text { text: info.loaded ? info.bpm : "--"; color: Theme.text; font-size: 15px; font-weight: 600; horizontal-alignment: center; }
-        TempoPanelMenu { group: group; info: info; tint: tint; mirrored: true; }
-    }
-    SyncButton { group: group; tint: tint; menu-right-aligned: mirrored; font-size: 14px; width: 72px; height: 38px; y: (parent.height - self.height) / 2; tour-id: group + ",sync_enabled"; }
-    if !mirrored: VerticalLayout {
-        width: 64px;
-        alignment: center;
-        Text { text: info.loaded ? info.bpm : "--"; color: Theme.text; font-size: 15px; font-weight: 600; horizontal-alignment: center; }
-        TempoPanelMenu { group: group; info: info; tint: tint; }
-    }
-}
-
-// With JOG on: the jog on the mixer side, as tall as the deck.
+// With JOG on: a big jog beside the header on the mixer side, as tall as
+// the cover, with no text in it.
 component LiteJog inherits Rectangle {
     in property <string> group;
     in property <DeckInfo> info;
@@ -58,8 +40,161 @@ component LiteJog inherits Rectangle {
         info: info;
         tint: tint;
         spin: spin;
+        plain: true;
         width: parent.height - 12px;
         height: self.width;
+    }
+}
+
+// The mini jog at the inner end of row 1: a dark disc whose one line turns
+// with the playhead, nothing written in it.
+component MiniJog inherits Rectangle {
+    in property <DeckInfo> info;
+    in property <angle> spin;
+    width: 46px;
+    height: 46px;
+    Rectangle {
+        border-radius: self.width / 2;
+        background: Theme.n-0a0a0b;
+        border-width: 3px;
+        border-color: Theme.n-48484c;
+    }
+    if info.loaded: Path {
+        width: parent.width;
+        height: parent.height;
+        viewbox-width: 100;
+        viewbox-height: 100;
+        stroke: Theme.n-9e9ea3;
+        stroke-width: 4px;
+        MoveTo { x: 50 + 16 * sin(spin); y: 50 - 16 * cos(spin); }
+        LineTo { x: 50 + 40 * sin(spin); y: 50 - 40 * cos(spin); }
+    }
+    Rectangle {
+        width: 14px;
+        height: 14px;
+        border-radius: 7px;
+        background: Theme.n-2a2a2d;
+    }
+}
+
+// The loop length box with LOOP under it.
+component LiteLoop inherits VerticalLayout {
+    in property <string> group;
+    in property <DeckInfo> info;
+    alignment: center;
+    spacing: 2px;
+    width: 104px;
+    LoopStepper { group: group; info: info; height: 34px; }
+    Text { text: "LOOP"; color: Theme.text-dim; font-size: 9px; font-weight: 700; letter-spacing: 0.5px; horizontal-alignment: center; }
+}
+
+// One deck's tempo on the mixer's outer edge: the BPM and its tempo panel
+// (TempoPanelMenu) on top, the tempo fader the full height under them, and
+// SYNC at the foot. Right-click the fader for key lock, as in 2-Deck.
+export component MixerTempo inherits Rectangle {
+    in property <int> deck;
+    in property <DeckInfo> info;
+    in property <bool> mirrored;
+    property <string> group: "[Channel" + (deck + 1) + "]";
+    property <color> tint: Theme.deck-color(deck);
+    property <int> keylock-index: Controls.resolve(group, "keylock");
+    background: Theme.panel;
+    width: LiteUi.tempo-width;
+    VerticalLayout {
+        padding: 5px;
+        padding-top: 4px;
+        spacing: 2px;
+        Text { text: info.loaded ? info.bpm : "--"; color: Theme.text; font-size: 13px; font-weight: 600; font-family: "Inter Tabular"; horizontal-alignment: center; height: 16px; vertical-alignment: center; }
+        TempoPanelMenu { group: group; info: info; tint: tint; mirrored: mirrored; }
+        Rectangle {
+            vertical-stretch: 1;
+            ControlFader {
+                x: (parent.width - self.width) / 2;
+                y: 2px;
+                width: 36px;
+                height: parent.height - 4px;
+                group: group;
+                key: "rate";
+                center-mark: true;
+                ticks: 9;
+                tint: tint;
+                glowing: Controls.value(keylock-index, Controls.tick) > 0;
+                context-menu(x, y) => { Controls.toggle(keylock-index); }
+            }
+        }
+        SyncButton { group: group; tint: tint; menu-right-aligned: mirrored; font-size: 11px; height: 24px; tour-id: group + ",sync_enabled"; }
+    }
+}
+
+// Under the mixer in the pads layer: the Beat FX on an X-Y pad, as on djay.
+// Pressing turns the Beat FX on, across sets its length in beats (1/16 to
+// 4) or its first setting when it has no beats, up and down its D/W;
+// letting go turns it off again unless it was on already.
+export component XyFxPad inherits Rectangle {
+    property <string> fx: "[EffectRack1_EffectUnit5_Effect1]";
+    property <int> enabled-index: Controls.resolve(fx, "enabled");
+    property <int> beats-index: Controls.resolve(fx, "beats");
+    property <int> meta-index: Controls.resolve(fx, "meta");
+    property <int> param-index: Controls.resolve(fx, "parameter1");
+    property <float> beats: Controls.value(beats-index, Controls.tick);
+    property <bool> was-on;
+    property <bool> held: touch.pressed;
+    property <float> px: 0.5;
+    property <float> py: 0.5;
+    background: Theme.panel;
+    width: LiteUi.centre-width;
+    function apply(x: length, y: length) {
+        root.px = clamp(x / grid.width, 0, 1);
+        root.py = clamp(y / grid.height, 0, 1);
+        if beats > 0 {
+            Controls.set-value(beats-index, pow(2, min(6, floor(root.px * 7)) - 4));
+        } else {
+            Controls.set-value(param-index, root.px);
+        }
+        Controls.set-value(meta-index, 1 - root.py);
+    }
+    grid := Rectangle {
+        x: 6px;
+        y: 6px;
+        width: parent.width - 12px;
+        height: parent.height - 12px;
+        border-radius: Theme.radius;
+        border-width: 1px;
+        border-color: Theme.border;
+        background: Theme.n-0a0a0b;
+        for i in 3: Rectangle { x: (i + 1) * parent.width / 4; y: 0; width: 1px; height: parent.height; background: Theme.n-232326; }
+        for i in 3: Rectangle { x: 0; y: (i + 1) * parent.height / 4; width: parent.width; height: 1px; background: Theme.n-232326; }
+        Text { x: 8px; y: parent.height - 16px; text: "X-Y BEAT FX"; color: Theme.text-dim; font-size: 9px; font-weight: 700; letter-spacing: 0.5px; }
+        Text { x: parent.width - self.width - 8px; y: parent.height - 16px; text: beats > 0 ? "← beats · D/W ↑" : "← setting · D/W ↑"; color: Theme.text-dim; font-size: 9px; }
+        Rectangle {
+            x: root.px * parent.width - self.width / 2;
+            y: root.py * parent.height - self.height / 2;
+            width: 16px;
+            height: 16px;
+            border-radius: 8px;
+            background: held ? Theme.lilac : Theme.lilac.transparentize(0.6);
+        }
+        touch := TouchArea {
+            pointer-event(e) => {
+                if e.button != PointerEventButton.left {
+                    return;
+                }
+                if e.kind == PointerEventKind.down {
+                    root.was-on = Controls.value(enabled-index, Controls.tick) > 0;
+                    Controls.set-value(enabled-index, 1);
+                    apply(self.mouse-x, self.mouse-y);
+                } else if e.kind == PointerEventKind.up || e.kind == PointerEventKind.cancel {
+                    if !root.was-on {
+                        Controls.set-value(enabled-index, 0);
+                    }
+                }
+            }
+            moved => {
+                if self.pressed {
+                    apply(self.mouse-x, self.mouse-y);
+                }
+            }
+        }
     }
 }
 
@@ -96,37 +231,38 @@ export component LiteDeck inherits Rectangle {
             DragAction.copy
         }
     }
-    HorizontalLayout {
+    VerticalLayout {
         spacing: 1px;
-        if mirrored && LiteUi.jogs: LiteJog { group: group; info: info; tint: tint; spin: spin; }
-        VerticalLayout {
+        HorizontalLayout {
             spacing: 1px;
-            horizontal-stretch: 1;
-            header := Header { deck: deck; info: info; overview: overview; mirrored: mirrored; group: group; beat-counter: false; }
-            Rectangle {
-                background: Theme.panel;
-                vertical-stretch: 1;
-                // Outside in: SYNC and the tempo, then PLAY and CUE by the mixer,
-                // centred in the room under the header.
-                VerticalLayout {
-                alignment: center;
-                HorizontalLayout {
-                    height: 40px;
-                    padding-left: 10px;
-                    padding-right: 10px;
-                    spacing: 8px;
-                    if mirrored: PlayButton { group: group; tint: tint; width: 72px; height: 38px; y: (parent.height - self.height) / 2; tour-id: group + ",play"; }
-                    if mirrored: ControlButton { group: group; key: "cue_default"; text: "CUE"; momentary: true; tint: tint; outline-when-lit: true; font-size: 14px; width: 72px; height: 38px; y: (parent.height - self.height) / 2; }
-                    if mirrored: Rectangle { horizontal-stretch: 1; }
-                    LiteTempo { group: group; info: info; tint: tint; mirrored: mirrored; }
-                    if !mirrored: Rectangle { horizontal-stretch: 1; }
-                    if !mirrored: PlayButton { group: group; tint: tint; width: 72px; height: 38px; y: (parent.height - self.height) / 2; tour-id: group + ",play"; }
-                    if !mirrored: ControlButton { group: group; key: "cue_default"; text: "CUE"; momentary: true; tint: tint; outline-when-lit: true; font-size: 14px; width: 72px; height: 38px; y: (parent.height - self.height) / 2; }
-                }
-                }
+            if mirrored && LiteUi.jogs: LiteJog { group: group; info: info; tint: tint; spin: spin; height: header.height; }
+            header := Header { deck: deck; info: info; overview: overview; mirrored: mirrored; group: group; beat-counter: false; horizontal-stretch: 1; }
+            if !mirrored && LiteUi.jogs: LiteJog { group: group; info: info; tint: tint; spin: spin; height: header.height; }
+        }
+        Rectangle {
+            background: Theme.panel;
+            vertical-stretch: 1;
+            // Outside in: LOOP, then CUE, PLAY and the mini jog by the mixer,
+            // centred in the room under the header.
+            VerticalLayout {
+            alignment: center;
+            HorizontalLayout {
+                height: 50px;
+                padding-left: 10px;
+                padding-right: 10px;
+                spacing: 8px;
+                if mirrored && !LiteUi.jogs: MiniJog { info: info; spin: spin; y: (parent.height - self.height) / 2; }
+                if mirrored: PlayButton { group: group; tint: tint; width: 72px; height: 38px; y: (parent.height - self.height) / 2; tour-id: group + ",play"; }
+                if mirrored: ControlButton { group: group; key: "cue_default"; text: "CUE"; momentary: true; tint: tint; outline-when-lit: true; font-size: 14px; width: 72px; height: 38px; y: (parent.height - self.height) / 2; }
+                if mirrored: Rectangle { horizontal-stretch: 1; }
+                LiteLoop { group: group; info: info; }
+                if !mirrored: Rectangle { horizontal-stretch: 1; }
+                if !mirrored: ControlButton { group: group; key: "cue_default"; text: "CUE"; momentary: true; tint: tint; outline-when-lit: true; font-size: 14px; width: 72px; height: 38px; y: (parent.height - self.height) / 2; }
+                if !mirrored: PlayButton { group: group; tint: tint; width: 72px; height: 38px; y: (parent.height - self.height) / 2; tour-id: group + ",play"; }
+                if !mirrored && !LiteUi.jogs: MiniJog { info: info; spin: spin; y: (parent.height - self.height) / 2; }
+            }
             }
         }
-        if !mirrored && LiteUi.jogs: LiteJog { group: group; info: info; tint: tint; spin: spin; }
     }
     if TrackDrag.active || InstrumentsUi.dragging || TrackDrag.files-over || drop.has-drag: Rectangle {
         border-radius: Theme.radius + 2px;
@@ -214,8 +350,8 @@ export component LiteMixer inherits Rectangle {
     }
 }
 
-// One deck's half of the pad bar, under that deck: the pads (tabs over two
-// rows of four, as on most controllers) and the loop on the mixer side.
+// One deck's pads in the pads layer, under that deck: tabs over two rows of
+// four, as on most controllers. The loop is in row 1.
 export component PadBarHalf inherits Rectangle {
     in property <int> deck;
     in property <DeckInfo> info;
@@ -230,8 +366,6 @@ export component PadBarHalf inherits Rectangle {
         padding-left: 8px;
         padding-right: 8px;
         spacing: 10px;
-        if mirrored: LoopSection { group: group; info: info; tint: tint; mirrored: true; }
         Pads { deck: deck; group: group; info: info; horizontal-stretch: 1; }
-        if !mirrored: LoopSection { group: group; info: info; tint: tint; }
     }
 }

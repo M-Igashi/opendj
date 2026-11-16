@@ -545,6 +545,8 @@ export component FxBar inherits Rectangle {
     // 4-Deck: decks 3 and 1 left of the Beat FX, 2 and 4 right of it, each
     // deck's effects stacked.
     in property <bool> four;
+    // How wide the Beat FX is: the mixer's width above it.
+    in property <length> centre: 254px;
     background: Theme.n-000000;
     height: four ? 96px : 68px;
     if !four: HorizontalLayout {
@@ -557,7 +559,7 @@ export component FxBar inherits Rectangle {
             preferred-width: 400px;
             for i in 3: FxCell { unit: 0; slot: i; tint: Theme.deck1; }
         }
-        BeatFxSection { }
+        BeatFxSection { width: root.centre; }
         HorizontalLayout {
             spacing: 1px;
             horizontal-stretch: 1;

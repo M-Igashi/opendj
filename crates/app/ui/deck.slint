@@ -826,7 +826,10 @@ component TimeKey inherits HorizontalLayout {
     if show-time: VerticalLayout {
         alignment: center;
         Text { text: info.loaded ? "-" + info.remaining-seconds : "-0:00"; color: info.end-flash-time ? Theme.danger : Theme.text; font-size: 23px; font-weight: 500; horizontal-alignment: right; }
-        Text { text: info.loaded ? info.total : ""; color: Theme.text-dim; font-size: 11px; horizontal-alignment: right; }
+        // Elapsed under the time left: small and grey, so the two
+        // clocks don't read alike.
+        property <int> secs: floor(info.progress * info.duration);
+        Text { text: info.loaded ? "+" + floor(secs / 60) + ":" + (Math.mod(secs, 60) < 10 ? "0" : "") + Math.mod(secs, 60) : ""; color: Theme.text-dim; font-size: 11px; horizontal-alignment: right; }
     }
     if show-time: EdgeVLine { top: 6px; bottom: 6px; line-color: Theme.n-2c2c2f; }
     KeyBox { group: group; info: info; tint: tint; compact: !show-time; }
