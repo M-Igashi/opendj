@@ -107,17 +107,16 @@ component LoopCounter inherits VerticalLayout {
     }
 }
 
-// One of the pad area's tabs, across its top.
+// One of the pad area's tabs, a folder tab: the open one joins the sheet
+// below it, the others sit back darker.
 component ToolTab inherits Rectangle {
     in property <string> text;
     in property <bool> on;
     callback clicked();
-    // Styled like the loop's IN and OUT.
-    border-radius: Theme.radius;
-    background: ta.pressed ? Theme.control-pressed : on ? Theme.n-d1d1d6.with-alpha(0.14) : ta.has-hover ? Theme.n-1d1d20 : Theme.control;
-    border-width: 1px;
-    border-color: on ? Theme.n-d1d1d6 : Theme.border;
-    Text { text: root.text; color: on ? Theme.n-d1d1d6 : Theme.text; font-size: 8px; font-weight: 700; letter-spacing: 0.3px; }
+    border-top-left-radius: 5px;
+    border-top-right-radius: 5px;
+    background: on ? Theme.panel-raised : ta.has-hover ? Theme.n-1d1d20 : Theme.well;
+    Text { text: root.text; color: on ? Theme.text : ta.has-hover ? Theme.text : Theme.text-dim; font-size: 10px; font-weight: 700; letter-spacing: 0.3px; }
     ta := TouchArea { mouse-cursor: pointer; clicked => { root.clicked(); } }
 }
 
@@ -198,7 +197,7 @@ component KeyTool inherits VerticalLayout {
     }
 }
 
-// The pad area: tabs across the top (PADS, STEMS, X-Y, KEY) over what
+// TOOLS: tabs across the top (PADS, STEMS, X-Y, KEY) over what
 // the open one shows.
 component PadArea inherits VerticalLayout {
     in property <int> deck;
@@ -208,10 +207,12 @@ component PadArea inherits VerticalLayout {
     property <color> tint: Theme.deck-color(deck);
     property <int> tool: deck == 0 ? LiteUi.tool-a : LiteUi.tool-b;
     width: LiteUi.pads-width;
-    spacing: 4px;
+    // Tab row 30 + sheet (6 + page names 23 + pads 70 + 6): its top lines
+    // up with the beat counter's, its bottom with IN/OUT and PLAY/CUE.
+    height: 135px;
     HorizontalLayout {
-        height: 20px;
-        spacing: 4px;
+        height: 30px;
+        spacing: 2px;
         for name[i] in LiteUi.tool-names: ToolTab {
             horizontal-stretch: 1;
             text: name;
@@ -221,12 +222,22 @@ component PadArea inherits VerticalLayout {
             }
         }
     }
+    // The sheet under the tabs, the open tab's colour.
     Rectangle {
         vertical-stretch: 1;
-        if tool == 0: Pads { width: parent.width; height: parent.height; deck: deck; group: group; info: info; tab-font: 9px; pager: false; }
-        if tool == 1: StemsTool { width: parent.width; height: parent.height; deck: deck; }
-        if tool == 2: XyFxPad { x: -4px; y: -4px; width: parent.width + 8px; height: parent.height + 8px; deck: deck; }
-        if tool == 3: KeyTool { width: parent.width; height: parent.height; group: group; info: info; tint: tint; }
+        background: Theme.panel-raised;
+        border-bottom-left-radius: 5px;
+        border-bottom-right-radius: 5px;
+        Rectangle {
+            x: 6px;
+            y: 6px;
+            width: parent.width - 12px;
+            height: parent.height - 12px;
+            if tool == 0: Pads { width: parent.width; height: parent.height; deck: deck; group: group; info: info; tab-font: 9px; pager: false; }
+            if tool == 1: StemsTool { width: parent.width; height: parent.height; deck: deck; }
+            if tool == 2: XyFxPad { x: -4px; y: -4px; width: parent.width + 8px; height: parent.height + 8px; deck: deck; }
+            if tool == 3: KeyTool { width: parent.width; height: parent.height; group: group; info: info; tint: tint; }
+        }
     }
 }
 
@@ -273,21 +284,44 @@ export component LiteDeck inherits Rectangle {
             Rectangle {
                 background: Theme.panel;
                 horizontal-stretch: 1;
+                // Three columns on one grid: TOOLS (pads and the other tools),
+                // the loop with its beat counter, and the jog with PLAY and
+                // CUE, split by hairlines. All three end on the same line.
                 HorizontalLayout {
-                    padding: 6px;
-                    spacing: 10px;
-                    if !mirrored: PadArea { deck: deck; info: info; }
-                    if mirrored: JogSection { bpm-only: true; group: group; mirrored: true; info: info; tint: tint; spin: spin; }
-                    Rectangle { horizontal-stretch: 1; }
-                    VerticalLayout {
-                        alignment: end;
-                        spacing: 10px;
-                        if BeatCounter.mode > 0: LoopCounter { count: BeatCounter.decks[deck]; tint: tint; }
-                        LoopSection { group: group; info: info; tint: tint; mirrored: mirrored; }
+                    padding-top: 6px;
+                    padding-bottom: 6px;
+                    if !mirrored: HorizontalLayout {
+                        padding-left: 12px;
+                        padding-right: 12px;
+                        VerticalLayout { alignment: end; PadArea { deck: deck; info: info; } }
                     }
-                    Rectangle { horizontal-stretch: 1; }
-                    if !mirrored: JogSection { bpm-only: true; group: group; info: info; tint: tint; spin: spin; }
-                    if mirrored: PadArea { deck: deck; info: info; mirrored: true; }
+                    if mirrored: HorizontalLayout {
+                        padding-left: 12px;
+                        padding-right: 12px;
+                        JogSection { bpm-only: true; group: group; mirrored: true; info: info; tint: tint; spin: spin; }
+                    }
+                    Rectangle { width: 1px; background: Theme.border; }
+                    HorizontalLayout {
+                        horizontal-stretch: 1;
+                        alignment: center;
+                        VerticalLayout {
+                            alignment: end;
+                            spacing: 10px;
+                            if BeatCounter.mode > 0: LoopCounter { count: BeatCounter.decks[deck]; tint: tint; }
+                            LoopSection { group: group; info: info; tint: tint; mirrored: mirrored; }
+                        }
+                    }
+                    Rectangle { width: 1px; background: Theme.border; }
+                    if !mirrored: HorizontalLayout {
+                        padding-left: 12px;
+                        padding-right: 12px;
+                        JogSection { bpm-only: true; group: group; info: info; tint: tint; spin: spin; }
+                    }
+                    if mirrored: HorizontalLayout {
+                        padding-left: 12px;
+                        padding-right: 12px;
+                        VerticalLayout { alignment: end; PadArea { deck: deck; info: info; mirrored: true; } }
+                    }
                 }
             }
             if mirrored: DeckTempo { deck: deck; info: info; mirrored: true; }

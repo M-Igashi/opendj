@@ -2317,7 +2317,7 @@ component HotcueCell inherits Rectangle {
 component PadTabs inherits Rectangle {
     // The tab names' size: smaller on 2-Deck's narrow pads.
     in property <length> font-size: 10px;
-    // Tabs as separate buttons, styled like the loop's IN and OUT (2-Deck).
+    // 2-Deck: the open page as a lilac button, the others as plain names.
     in property <bool> buttons;
     // The deck, 1 to 4, for Map mode: a controller's pad mode button opens
     // a tab by its place (`pad_tab`).
@@ -2345,13 +2345,14 @@ component PadTabs inherits Rectangle {
             min-width: 0px;
             preferred-width: 0px;
             border-radius: buttons ? Theme.radius : 0px;
-            border-width: buttons ? 1px : 0px;
-            border-color: on ? Theme.n-d1d1d6 : Theme.border;
+            // As buttons, only the open page is one, in lilac; the others
+            // are its name alone.
+            border-width: buttons ? (on ? 1px : 0px) : 0px;
+            border-color: Theme.lilac;
             background: !buttons ? (on ? Theme.panel-raised : Theme.well)
-                : tab-touch.pressed ? Theme.control-pressed
-                : on ? Theme.n-d1d1d6.with-alpha(0.14)
-                : tab-touch.has-hover ? Theme.n-1d1d20 : Theme.control;
-            Text { width: parent.width - 4px; horizontal-alignment: center; text: names[slots[i]]; color: buttons ? (on ? Theme.n-d1d1d6 : Theme.text) : on ? Theme.text : Theme.text-dim; font-size: root.font-size; font-weight: 600; overflow: elide; }
+                : on ? Theme.lilac.with-alpha(0.16)
+                : transparent;
+            Text { width: parent.width - 4px; horizontal-alignment: center; text: names[slots[i]]; color: buttons ? (on ? Theme.lilac-text : tab-touch.has-hover ? Theme.text : Theme.text-dim) : on ? Theme.text : Theme.text-dim; font-size: root.font-size; font-weight: 600; overflow: elide; }
             tab-touch := TouchArea {
                 pointer-event(e) => {
                     if e.kind != PointerEventKind.down {
