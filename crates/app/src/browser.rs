@@ -62,6 +62,7 @@ mod spotify_export;
 mod staging;
 mod streamed;
 mod tag_chips;
+mod tag_health;
 mod track_menu;
 mod up_next;
 mod usb;
@@ -166,6 +167,11 @@ enum Contents {
     /// The tracks taken out of the collection: merged copies, quarantined
     /// and removed tracks, to bring back.
     Quarantine,
+    /// Collection Health's Tags page: genres and tag groups, how they're
+    /// used, and merging names (see [`tag_health`]).
+    Tags,
+    /// Collection Health's Lists page: what is wrong in the DJ's lists.
+    Lists,
 }
 
 /// Whether the streaming services that are built (Spotify, TIDAL) can be
@@ -647,6 +653,12 @@ pub struct Browser {
     /// The copies grouped by case, worked out (reading their files) the
     /// first time they're needed after the library changes.
     dupe_groups: OnceCell<Vec<Group>>,
+    /// What each copy's file is like, read with the groups.
+    dupe_facts: RefCell<HashMap<usize, opendj_library::dupes::FileFacts>>,
+    /// Groups of copies opened to show every copy, by the kept copy's id.
+    open_groups: HashSet<usize>,
+    /// Every group shows its copies.
+    all_copies: bool,
     /// Pairs of linked tracks, both ways round.
     links: HashSet<(usize, usize)>,
     /// Tempo and key of the track playing now, for "mixes with deck", and its id.
@@ -692,7 +704,7 @@ pub struct Browser {
     /// The crates each track is in, by track id.
     crates: HashMap<usize, Vec<String>>,
     /// Empty crates and entries for removed tracks.
-    list_health: opendj_library::sets::ListHealth,
+    list_report: opendj_library::sets::ListReport,
     /// Hot cue controls per deck: enabled and position.
     /// Each deck's hot cues: enabled, position and a saved loop's end.
     hotcues: [Vec<(ControlHandle, ControlHandle, ControlHandle)>; NUM_DECKS],
@@ -753,6 +765,14 @@ pub struct Browser {
     health: Facts,
     /// Looks for covers in the background, for the "No cover" check.
     cover_scan: CoverScan,
+    /// Makes audio fingerprints, for copies found by their sound.
+    sound_scan: crate::sound_scan::SoundScan,
+    /// Each track's audio fingerprint, by id.
+    sounds: HashMap<usize, Vec<u32>>,
+    /// Pairs of tracks (ids, smaller first) that sound the same.
+    alike: Vec<(usize, usize)>,
+    /// Fingerprints taken in since `alike` was worked out.
+    sounds_new: usize,
     /// What the last Collection Health fix did.
     health_status: String,
     /// How many tracks have been taken out of the library.
@@ -1335,6 +1355,9 @@ impl Browser {
             indexed: Vec::new(),
             duplicates: HashSet::new(),
             dupe_groups: OnceCell::new(),
+            dupe_facts: RefCell::new(HashMap::new()),
+            open_groups: HashSet::new(),
+            all_copies: false,
             links: HashSet::new(),
             deck_ref: None,
             deck_track: None,
@@ -1359,7 +1382,7 @@ impl Browser {
             played: played::Played::new(registry),
             menu_lists: Vec::new(),
             crates: HashMap::new(),
-            list_health: Default::default(),
+            list_report: Default::default(),
             hotcues: std::array::from_fn(|d| {
                 (1..=NUM_HOTCUES)
                     .map(|n| {
@@ -1405,6 +1428,10 @@ impl Browser {
             pending_moves: HashMap::new(),
             health: Facts::default(),
             cover_scan: CoverScan::start(),
+            sound_scan: crate::sound_scan::SoundScan::start(),
+            sounds: HashMap::new(),
+            alike: Vec::new(),
+            sounds_new: 0,
             health_status: String::new(),
             removed: 0,
             quarantined: 0,
@@ -2035,6 +2062,7 @@ impl Browser {
         Self::install_mixed_set(app, &with);
         Self::install_health(&app.global::<HealthUi>(), &with);
         Self::install_cleanup(&app.global::<crate::CleanupUi>(), &with);
+        Self::install_lists(&app.global::<crate::ListsUi>(), &with);
         Self::install_fix_names(app, &with);
         Self::install_analysis(&edit, &with);
         Self::install_albums(&edit, &with);
@@ -4807,6 +4835,12 @@ impl Browser {
                 hidden_below = Some(n.depth);
             }
         }
+        // Only worked out while Collection Health's tree is shown.
+        let tags_to_roll_up = if self.health_view && self.saved() && self.tree == COLLECTION {
+            self.tags_to_roll_up()
+        } else {
+            0
+        };
         let folders: Vec<Folder> = self
             .visible_nodes
             .iter()
@@ -4837,6 +4871,20 @@ impl Browser {
                         Contents::Health(Some(c)) if n.kind == KIND_AREA => {
                             self.check_state(c) as i32
                         }
+                        Contents::Lists => {
+                            (if self.list_report.issues.is_empty() {
+                                health::CheckState::Clear
+                            } else {
+                                health::CheckState::Check
+                            }) as i32
+                        }
+                        Contents::Tags if n.kind == KIND_AREA => {
+                            (if tags_to_roll_up > 0 {
+                                health::CheckState::Check
+                            } else {
+                                health::CheckState::Clear
+                            }) as i32
+                        }
                         _ => n.icon as i32,
                     },
                     count: match &n.contents {
@@ -4858,6 +4906,10 @@ impl Browser {
                         Contents::Dupes(case) => self.dupe_tracks(Some(*case)).len() as i32,
                         Contents::Ignored => self.ignored_tracks().len() as i32,
                         Contents::Quarantine => self.removed as i32,
+                        Contents::Tags if n.kind == KIND_AREA => tags_to_roll_up as i32,
+                        Contents::Lists => {
+                            (self.list_report.lists - self.list_report.tidy()) as i32
+                        }
                         _ => n.count.map_or(-1, |c| c as i32),
                     },
                     dim: n.dim,
@@ -5099,13 +5151,14 @@ impl Browser {
                 .filter(|&t| self.at_stage(&self.library[t], *stage, dir.as_deref()))
                 .collect(),
             Contents::Query(q) => self.search(&Query::parse(q), None),
-            Contents::Health(Some(Check::Duplicate)) => self.dupe_tracks(None),
-            Contents::Dupes(case) => self.dupe_tracks(Some(*case)),
+            Contents::Health(Some(Check::Duplicate)) => self.dupe_rows(None),
+            Contents::Dupes(case) => self.dupe_rows(Some(*case)),
             Contents::Health(Some(check)) => self.health_tracks(*check),
             Contents::Health(None) | Contents::Area(_) => Vec::new(),
             Contents::Ignored => self.ignored_tracks(),
             // Store rows: tracks no longer in the library.
             Contents::Quarantine => Vec::new(),
+            Contents::Tags | Contents::Lists => Vec::new(),
             Contents::Grouping(g) => all()
                 .into_iter()
                 .filter(|&t| self.library[t].info.grouping == *g)

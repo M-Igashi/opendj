@@ -101,6 +101,7 @@ mod settings;
 mod shortcuts;
 mod sleep_timer;
 mod smooth;
+mod sound_scan;
 mod soundcloud;
 mod sources;
 mod spotify;
@@ -1673,6 +1674,7 @@ fn run(graphics: Rc<graphics::Choice>) -> Result<(), Box<dyn std::error::Error>>
                 browser.borrow_mut().poll_inbox_albums();
                 browser.borrow_mut().poll_rekordbox_xml();
                 browser.borrow_mut().poll_covers();
+                browser.borrow_mut().poll_sounds();
                 browser.borrow_mut().poll_located();
                 browser.borrow_mut().poll_cleanup();
                 browser.borrow_mut().poll_files();
