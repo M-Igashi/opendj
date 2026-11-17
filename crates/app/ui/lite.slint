@@ -2,12 +2,13 @@
 // from the outer edge in: the tempo fader with SYNC and the tempo % over
 // it, a small pad grid with its pages named across the top, the loop, and
 // the jog (its BPM is the deck's BPM readout) with PLAY and CUE under it.
+// The beat counter sits over the loop, which lines up with PLAY and CUE.
 // The mixer runs the full height between the decks; the FX have their own
 // row (the FX bar). A deck holding a Groove Box or an instrument shows the
 // full deck instead (see main.slint).
 import { Theme } from "theme.slint";
 import { ControlFader, Controls, SyncButton } from "controls.slint";
-import { DeckInfo, Header, JogSection, LoopSection, Pads, TempoPanelMenu } from "deck.slint";
+import { BeatCount, BeatCounter, DeckInfo, Header, JogSection, LoopSection, Pads, TempoPanelMenu } from "deck.slint";
 import { TrackDrag } from "library.slint";
 import { InstrumentsUi } from "instruments.slint";
 
@@ -55,6 +56,40 @@ component DeckTempo inherits Rectangle {
                 context-menu(x, y) => { Controls.toggle(keylock-index); }
             }
         }
+    }
+}
+
+// The beat counter over the loop, as wide as it, to learn to count beats:
+// four beat squares (the downbeat white), a strip filling through each
+// group of four bars (lilac in the last bar before a phrase), then
+// phrase.bar.beat and the bars to the next phrase.
+component LoopCounter inherits VerticalLayout {
+    in property <BeatCount> count;
+    in property <color> tint;
+    width: 96px;
+    spacing: 4px;
+    HorizontalLayout {
+        spacing: 3px;
+        height: 16px;
+        for i in 4: Rectangle {
+            border-radius: 3px;
+            background: !count.shown || i != count.beat ? Theme.n-2c2c2f
+                : (i == 0 ? Theme.text : tint).with-alpha(count.playing ? 1 : 0.5);
+        }
+    }
+    HorizontalLayout {
+        spacing: 3px;
+        height: 4px;
+        for i in 4: Rectangle {
+            border-radius: 2px;
+            background: !count.shown ? Theme.n-2c2c2f : count.last-bar ? Theme.accent : i <= count.bar ? tint.with-alpha(0.75) : Theme.n-2c2c2f;
+        }
+    }
+    HorizontalLayout {
+        spacing: 4px;
+        height: 14px;
+        Text { text: count.shown ? count.label : "-.-.-"; color: count.shown ? Theme.text : Theme.text-dim; font-size: 11px; font-weight: 600; font-family: "Inter Tabular"; vertical-alignment: center; }
+        Text { horizontal-stretch: 1; text: count.shown ? count.countdown : ""; color: count.next-color; font-size: 10px; font-weight: 600; horizontal-alignment: right; vertical-alignment: center; overflow: elide; }
     }
 }
 
@@ -107,7 +142,12 @@ export component LiteDeck inherits Rectangle {
                     if !mirrored: Pads { deck: deck; group: group; info: info; tab-font: 9px; width: LiteUi.pads-width; }
                     if mirrored: JogSection { group: group; mirrored: true; info: info; tint: tint; spin: spin; }
                     Rectangle { horizontal-stretch: 1; }
-                    LoopSection { group: group; info: info; tint: tint; mirrored: mirrored; }
+                    VerticalLayout {
+                        alignment: end;
+                        spacing: 10px;
+                        if BeatCounter.mode > 0: LoopCounter { count: BeatCounter.decks[deck]; tint: tint; }
+                        LoopSection { group: group; info: info; tint: tint; mirrored: mirrored; }
+                    }
                     Rectangle { horizontal-stretch: 1; }
                     if !mirrored: JogSection { group: group; info: info; tint: tint; spin: spin; }
                     if mirrored: Pads { deck: deck; group: group; info: info; tab-font: 9px; width: LiteUi.pads-width; }
