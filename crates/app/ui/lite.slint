@@ -19,7 +19,7 @@ export global LiteUi {
     // The tempo column on the outer edge.
     out property <length> tempo-width: 64px;
     // The pad grid: small, as the pads never need to be big.
-    out property <length> pads-width: 288px;
+    out property <length> pads-width: 250px;
     // The mixer (Mixer with slim), which the Beat FX under it matches.
     out property <length> mixer-width: 250px;
     // The old JOG button's setting, kept for its saved value; the jog is
@@ -107,7 +107,7 @@ component LoopCounter inherits VerticalLayout {
     }
 }
 
-// One of the pad area's tabs, down its outer side.
+// One of the pad area's tabs, across its top.
 component ToolTab inherits Rectangle {
     in property <string> text;
     in property <bool> on;
@@ -198,9 +198,9 @@ component KeyTool inherits VerticalLayout {
     }
 }
 
-// The pad area: tabs down the outer side (PADS, STEMS, X-Y, KEY) beside
-// what the open one shows.
-component PadArea inherits HorizontalLayout {
+// The pad area: tabs across the top (PADS, STEMS, X-Y, KEY) over what
+// the open one shows.
+component PadArea inherits VerticalLayout {
     in property <int> deck;
     in property <DeckInfo> info;
     in property <bool> mirrored;
@@ -209,11 +209,11 @@ component PadArea inherits HorizontalLayout {
     property <int> tool: deck == 0 ? LiteUi.tool-a : LiteUi.tool-b;
     width: LiteUi.pads-width;
     spacing: 4px;
-    if !mirrored: VerticalLayout {
-        width: 34px;
+    HorizontalLayout {
+        height: 20px;
         spacing: 4px;
         for name[i] in LiteUi.tool-names: ToolTab {
-            vertical-stretch: 1;
+            horizontal-stretch: 1;
             text: name;
             on: tool == i;
             clicked => {
@@ -222,23 +222,11 @@ component PadArea inherits HorizontalLayout {
         }
     }
     Rectangle {
-        horizontal-stretch: 1;
+        vertical-stretch: 1;
         if tool == 0: Pads { width: parent.width; height: parent.height; deck: deck; group: group; info: info; tab-font: 9px; pager: false; }
         if tool == 1: StemsTool { width: parent.width; height: parent.height; deck: deck; }
         if tool == 2: XyFxPad { x: -4px; y: -4px; width: parent.width + 8px; height: parent.height + 8px; deck: deck; }
         if tool == 3: KeyTool { width: parent.width; height: parent.height; group: group; info: info; tint: tint; }
-    }
-    if mirrored: VerticalLayout {
-        width: 34px;
-        spacing: 4px;
-        for name[i] in LiteUi.tool-names: ToolTab {
-            vertical-stretch: 1;
-            text: name;
-            on: tool == i;
-            clicked => {
-                if deck == 0 { LiteUi.tool-a = i; } else { LiteUi.tool-b = i; }
-            }
-        }
     }
 }
 
