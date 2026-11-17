@@ -2317,6 +2317,8 @@ component HotcueCell inherits Rectangle {
 component PadTabs inherits Rectangle {
     // The tab names' size: smaller on 2-Deck's narrow pads.
     in property <length> font-size: 10px;
+    // Tabs as separate buttons, styled like the loop's IN and OUT (2-Deck).
+    in property <bool> buttons;
     // The deck, 1 to 4, for Map mode: a controller's pad mode button opens
     // a tab by its place (`pad_tab`).
     in property <int> deck-number;
@@ -2331,19 +2333,26 @@ component PadTabs inherits Rectangle {
     // Square tabs on top of the pad grid, split by the same black lines:
     // the open one is lit like the pads, the others sit back darker.
     height: 23px;
-    background: Theme.n-000000;
+    background: buttons ? transparent : Theme.n-000000;
     HorizontalLayout {
-        padding: 1px;
-        padding-bottom: 0px;
-        spacing: 1px;
+        padding: buttons ? 0px : 1px;
+        padding-bottom: buttons ? 3px : 0px;
+        spacing: buttons ? 4px : 1px;
         for n in 4: Rectangle {
             property <int> i: first + n;
+            property <bool> on: i == selected;
             horizontal-stretch: 1;
             min-width: 0px;
             preferred-width: 0px;
-            background: i == selected ? Theme.panel-raised : Theme.well;
-            Text { width: parent.width - 4px; horizontal-alignment: center; text: names[slots[i]]; color: i == selected ? Theme.text : Theme.text-dim; font-size: root.font-size; font-weight: 600; overflow: elide; }
-            TouchArea {
+            border-radius: buttons ? Theme.radius : 0px;
+            border-width: buttons ? 1px : 0px;
+            border-color: on ? Theme.n-d1d1d6 : Theme.border;
+            background: !buttons ? (on ? Theme.panel-raised : Theme.well)
+                : tab-touch.pressed ? Theme.control-pressed
+                : on ? Theme.n-d1d1d6.with-alpha(0.14)
+                : tab-touch.has-hover ? Theme.n-1d1d20 : Theme.control;
+            Text { width: parent.width - 4px; horizontal-alignment: center; text: names[slots[i]]; color: buttons ? (on ? Theme.n-d1d1d6 : Theme.text) : on ? Theme.text : Theme.text-dim; font-size: root.font-size; font-weight: 600; overflow: elide; }
+            tab-touch := TouchArea {
                 pointer-event(e) => {
                     if e.kind != PointerEventKind.down {
                         return;
@@ -2601,7 +2610,7 @@ export component Pads inherits HorizontalLayout {
         horizontal-stretch: 1;
         // The tabs sit right on the grid.
         spacing: 0px;
-        PadTabs { font-size: tab-font; deck-number: deck + 1; names: ["HOT CUES", "PAD FX 1", "BEAT JUMP", "SAMPLER", "STEMS", "BEAT LOOP", "PAD FX 2", "KEYBOARD", "KEY SHIFT", "LOOP ROLL", "SLICER", "FREEZE"]; slots: slots; selected <=> tab; pick(t, p) => { Controls.set-value(slot-index[t], p); } first: tab >= 4 ? 4 : 0; }
+        PadTabs { buttons: !pager; font-size: tab-font; deck-number: deck + 1; names: ["HOT CUES", "PAD FX 1", "BEAT JUMP", "SAMPLER", "STEMS", "BEAT LOOP", "PAD FX 2", "KEYBOARD", "KEY SHIFT", "LOOP ROLL", "SLICER", "FREEZE"]; slots: slots; selected <=> tab; pick(t, p) => { Controls.set-value(slot-index[t], p); } first: tab >= 4 ? 4 : 0; }
         if page == 3: SamplerPanel { bank: sampler-page; vertical-stretch: 1; }
         // The black background shows through the 1px gaps as the grid lines.
         if page != 3: Rectangle {

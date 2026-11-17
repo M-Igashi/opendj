@@ -7,7 +7,8 @@
 // row (the FX bar). A deck holding a Groove Box or an instrument shows the
 // full deck instead (see main.slint).
 import { Theme } from "theme.slint";
-import { ControlFader, Controls, SyncButton } from "controls.slint";
+import { ControlButton, ControlFader, Controls, SyncButton } from "controls.slint";
+import { XyFxPad } from "fxbar.slint";
 import { BeatCount, BeatCounter, DeckInfo, Header, JogSection, LoopSection, Pads, PitchSide, TempoPanelMenu } from "deck.slint";
 import { TrackDrag } from "library.slint";
 import { InstrumentsUi } from "instruments.slint";
@@ -18,12 +19,16 @@ export global LiteUi {
     // The tempo column on the outer edge.
     out property <length> tempo-width: 64px;
     // The pad grid: small, as the pads never need to be big.
-    out property <length> pads-width: 250px;
+    out property <length> pads-width: 288px;
     // The mixer (Mixer with slim), which the Beat FX under it matches.
     out property <length> mixer-width: 250px;
     // The old JOG button's setting, kept for its saved value; the jog is
     // always in the row now.
     in-out property <bool> jogs: false;
+    // What each deck's pad area shows: 0 PADS, 1 STEMS, 2 X-Y, 3 KEY.
+    in-out property <int> tool-a: 0;
+    in-out property <int> tool-b: 0;
+    out property <[string]> tool-names: ["PADS", "STEMS", "X-Y", "KEY"];
 }
 
 // One deck's tempo on the outer edge: SYNC and the tempo % (its menu opens
@@ -102,6 +107,141 @@ component LoopCounter inherits VerticalLayout {
     }
 }
 
+// One of the pad area's tabs, down its outer side.
+component ToolTab inherits Rectangle {
+    in property <string> text;
+    in property <bool> on;
+    callback clicked();
+    // Styled like the loop's IN and OUT.
+    border-radius: Theme.radius;
+    background: ta.pressed ? Theme.control-pressed : on ? Theme.n-d1d1d6.with-alpha(0.14) : ta.has-hover ? Theme.n-1d1d20 : Theme.control;
+    border-width: 1px;
+    border-color: on ? Theme.n-d1d1d6 : Theme.border;
+    Text { text: root.text; color: on ? Theme.n-d1d1d6 : Theme.text; font-size: 8px; font-weight: 700; letter-spacing: 0.3px; }
+    ta := TouchArea { mouse-cursor: pointer; clicked => { root.clicked(); } }
+}
+
+// The STEMS tab: vocals, melody, bass and drums, each a button that mutes
+// it (lit while it plays) over its level fader. Drums are the kick and
+// hi-hat stems together.
+component StemsTool inherits HorizontalLayout {
+    in property <int> deck;
+    property <string> base: "[Channel" + (deck + 1) + "_Stem";
+    property <bool> has-stems: Controls.value(Controls.resolve("[Channel" + (deck + 1) + "]", "stem_count"), Controls.tick) > 0;
+    spacing: 4px;
+    opacity: has-stems ? 1 : 0.4;
+    for stem[i] in [
+        { n: 4, also: 0, name: "VOCAL", tint: #09AD18 },
+        { n: 3, also: 0, name: "MELODY", tint: #A26018 },
+        { n: 2, also: 0, name: "BASS", tint: #E0464B },
+        { n: 1, also: 5, name: "DRUMS", tint: #3D7FD6 },
+    ]: VerticalLayout {
+        property <int> mute-index: Controls.resolve(base + stem.n + "]", "mute");
+        property <int> also-index: stem.also > 0 ? Controls.resolve(base + stem.also + "]", "mute") : -1;
+        property <bool> playing: Controls.value(mute-index, Controls.tick) < 0.5;
+        horizontal-stretch: 1;
+        spacing: 4px;
+        Rectangle {
+            height: 26px;
+            border-radius: Theme.radius;
+            background: playing ? stem.tint.with-alpha(0.22) : Theme.control;
+            border-width: 1px;
+            border-color: playing ? stem.tint : Theme.border;
+            Text { text: stem.name; color: playing ? Theme.text : Theme.text-dim; font-size: 8px; font-weight: 700; }
+            TouchArea {
+                mouse-cursor: pointer;
+                clicked => {
+                    Controls.set-value(mute-index, playing ? 1 : 0);
+                    if also-index >= 0 {
+                        Controls.set-value(also-index, playing ? 1 : 0);
+                    }
+                }
+            }
+        }
+        Rectangle {
+            vertical-stretch: 1;
+            ControlFader { width: 26px; height: parent.height; group: base + stem.n + "]"; key: "volume"; tint: stem.tint; ticks: 5; }
+        }
+    }
+}
+
+// The KEY tab: the key the deck plays with − and + shifts, MATCH to the
+// other deck, RESET, and key lock.
+component KeyTool inherits VerticalLayout {
+    in property <string> group;
+    in property <DeckInfo> info;
+    in property <color> tint;
+    alignment: center;
+    spacing: 8px;
+    HorizontalLayout {
+        spacing: 6px;
+        height: 40px;
+        ControlButton { group: group; key: "pitch_down"; text: "−"; momentary: true; font-size: 18px; width: 40px; }
+        Rectangle {
+            horizontal-stretch: 1;
+            border-radius: Theme.radius;
+            background: Theme.n-0a0a0b;
+            VerticalLayout {
+                alignment: center;
+                Text { text: info.loaded ? info.key : "--"; color: Theme.lilac-text; font-size: 18px; font-weight: 700; horizontal-alignment: center; }
+                Text { text: info.key-shift; color: Theme.text-dim; font-size: 10px; horizontal-alignment: center; }
+            }
+        }
+        ControlButton { group: group; key: "pitch_up"; text: "+"; momentary: true; font-size: 18px; width: 40px; }
+    }
+    HorizontalLayout {
+        spacing: 6px;
+        height: 30px;
+        ControlButton { group: group; key: "sync_key"; text: "MATCH"; momentary: true; font-size: 10px; horizontal-stretch: 1; }
+        ControlButton { group: group; key: "reset_key"; text: "RESET"; momentary: true; font-size: 10px; horizontal-stretch: 1; }
+        ControlButton { group: group; key: "keylock"; text: "KEY LOCK"; tint: Theme.lilac; outline-when-lit: true; font-size: 10px; horizontal-stretch: 1; }
+    }
+}
+
+// The pad area: tabs down the outer side (PADS, STEMS, X-Y, KEY) beside
+// what the open one shows.
+component PadArea inherits HorizontalLayout {
+    in property <int> deck;
+    in property <DeckInfo> info;
+    in property <bool> mirrored;
+    property <string> group: "[Channel" + (deck + 1) + "]";
+    property <color> tint: Theme.deck-color(deck);
+    property <int> tool: deck == 0 ? LiteUi.tool-a : LiteUi.tool-b;
+    width: LiteUi.pads-width;
+    spacing: 4px;
+    if !mirrored: VerticalLayout {
+        width: 34px;
+        spacing: 4px;
+        for name[i] in LiteUi.tool-names: ToolTab {
+            vertical-stretch: 1;
+            text: name;
+            on: tool == i;
+            clicked => {
+                if deck == 0 { LiteUi.tool-a = i; } else { LiteUi.tool-b = i; }
+            }
+        }
+    }
+    Rectangle {
+        horizontal-stretch: 1;
+        if tool == 0: Pads { width: parent.width; height: parent.height; deck: deck; group: group; info: info; tab-font: 9px; pager: false; }
+        if tool == 1: StemsTool { width: parent.width; height: parent.height; deck: deck; }
+        if tool == 2: XyFxPad { x: -4px; y: -4px; width: parent.width + 8px; height: parent.height + 8px; deck: deck; }
+        if tool == 3: KeyTool { width: parent.width; height: parent.height; group: group; info: info; tint: tint; }
+    }
+    if mirrored: VerticalLayout {
+        width: 34px;
+        spacing: 4px;
+        for name[i] in LiteUi.tool-names: ToolTab {
+            vertical-stretch: 1;
+            text: name;
+            on: tool == i;
+            clicked => {
+                if deck == 0 { LiteUi.tool-a = i; } else { LiteUi.tool-b = i; }
+            }
+        }
+    }
+}
+
 export component LiteDeck inherits Rectangle {
     in property <int> deck;
     in property <DeckInfo> info;
@@ -148,7 +288,7 @@ export component LiteDeck inherits Rectangle {
                 HorizontalLayout {
                     padding: 6px;
                     spacing: 10px;
-                    if !mirrored: Pads { deck: deck; group: group; info: info; tab-font: 9px; pager: false; width: LiteUi.pads-width; }
+                    if !mirrored: PadArea { deck: deck; info: info; }
                     if mirrored: JogSection { bpm-only: true; group: group; mirrored: true; info: info; tint: tint; spin: spin; }
                     Rectangle { horizontal-stretch: 1; }
                     VerticalLayout {
@@ -159,7 +299,7 @@ export component LiteDeck inherits Rectangle {
                     }
                     Rectangle { horizontal-stretch: 1; }
                     if !mirrored: JogSection { bpm-only: true; group: group; info: info; tint: tint; spin: spin; }
-                    if mirrored: Pads { deck: deck; group: group; info: info; tab-font: 9px; pager: false; width: LiteUi.pads-width; }
+                    if mirrored: PadArea { deck: deck; info: info; mirrored: true; }
                 }
             }
             if mirrored: DeckTempo { deck: deck; info: info; mirrored: true; }
