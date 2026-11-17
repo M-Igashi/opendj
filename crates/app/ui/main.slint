@@ -25,7 +25,7 @@ import { ChecklistUi } from "checklist.slint";
 import { LyricsUi, WaveLyrics, LyricsLane, WaveLine } from "lyrics.slint";
 import { NowPlayingUi } from "nowplaying.slint";
 import { DeckStrip, FourDeckBar } from "fourdeck.slint";
-import { LiteDeck, LiteMixer, LiteUi } from "lite.slint";
+import { LiteDeck, LiteUi } from "lite.slint";
 import { FxBar } from "fxbar.slint";
 import { InstrumentsUi, LiveItem, ParamMatch, PresetItem, PresetUi } from "instruments.slint";
 import { Browser, Folder, TrackRow, SideRow, SideTab, SideTabs, RailOrder, DragGrip, TrackDrag, LibraryEdit, KeepGoingUi, UpNextUi, MenuListRow, MenuTag, StoreUi, StreamMatch, WantedUi, FilesUi, AlbumsUi, AlbumTile, ColumnUi, ListColumn, HealthUi, HealthCard, HealthStage, HealthLine, HealthArea, HealthChip, HealthReview, CleanupUi, CleanupRow, FixNamesUi, GenreRow, BuyUi, BuyGroup, BuyRow } from "library.slint";
@@ -1535,7 +1535,7 @@ export component AppWindow inherits Window {
     property <length> deck-rows: lite ? lite-row
         : four ? (PadsUi.visible ? 330px : 247px) + 1px + 48px
         : prep ? 280px : 0px;
-    property <length> other-rows: 52px + 1px + 1px + deck-rows + 1px + (fx-bar-visible && !prep && !two-deck ? (four ? 96px : 68px) + 1px : 0px) + 1px + 36px;
+    property <length> other-rows: 52px + 1px + 1px + deck-rows + 1px + (fx-bar-visible && !prep ? (four ? 96px : 68px) + 1px : 0px) + 1px + 36px;
     // The library keeps room for about five tracks under its header: a
     // step with less shows the highest one that fits, but never below 3
     // unless the DJ chose less. The chosen one comes back
@@ -1564,7 +1564,6 @@ export component AppWindow inherits Window {
     // 2-Deck Basic, the lighter two-deck layout (lite.slint). A deck there holding
     // a Groove Box or an instrument shows the full deck, and the row is as
     // tall as 2-Deck's.
-    // 2-Deck: its FX live in each deck's tabs, so no FX bar.
     property <bool> two-deck: layout == 0 || layout == 4;
     property <bool> lite: two-deck && !library-expanded;
     property <bool> lite-full-a: Controls.value(Controls.resolve("[Groove1]", "enabled"), Controls.tick) > 0 || (!decks[0].loaded && InstrumentsUi.live(0) > 0);
@@ -1988,9 +1987,8 @@ export component AppWindow inherits Window {
                     // Prep always shows its waveform and never the FX bar,
                     // so neither button is offered there.
                     if !player && layout != 3: WaveformsButton { on <=> root.waveforms-visible; fits: wave-fits; changed-to(on) => { waveforms-visible-changed(on); } }
-                    if !player && layout != 3 && !two-deck: FxButton { on <=> root.fx-bar-visible; changed-to(on) => { fx-bar-visible-changed(on); } }
+                    if !player && layout != 3: FxButton { on <=> root.fx-bar-visible; changed-to(on) => { fx-bar-visible-changed(on); } }
                     if layout == 2: PadsButton { on <=> root.pads-visible; changed-to(on) => { pads-visible-changed(on); } }
-                    if layout == 0 || layout == 4: JogsButton { on <=> root.jogs-visible; changed-to(on) => { jogs-visible-changed(on); } }
                     if !player: Rectangle { horizontal-stretch: 1; }
                     // Between the pills, centred on the window (as the
                     // Player bar below is) while there is room, else
@@ -2143,7 +2141,7 @@ export component AppWindow inherits Window {
                             lite-a := LiteDeck { width: parent.width; height: parent.height; visible: !lite-full-a; deck: 0; info: decks[0]; overview: overview-1; spin: spin-1; }
                             if lite-full-a: Deck { width: parent.width; height: parent.height; deck: 0; info: decks[0]; spin: spin-1; overview: overview-1; }
                         }
-                        if !external-mixer && !(lite-full-a || lite-full-b): LiteMixer { }
+                        if !external-mixer && !(lite-full-a || lite-full-b): Mixer { slim: true; }
                         if !external-mixer && (lite-full-a || lite-full-b): Mixer { }
                         if external-mixer: ExternalMixer { }
                         Rectangle {
@@ -2204,11 +2202,12 @@ export component AppWindow inherits Window {
             // bar hides it.
             FxBar {
                 four: four;
-                height: library-expanded || !fx-bar-visible || player || prep || two-deck ? 0px : four ? 96px : 68px;
-                visible: !library-expanded && fx-bar-visible && !player && !prep && !two-deck;
+                centre: lite && !(lite-full-a || lite-full-b) ? LiteUi.mixer-width : 254px;
+                height: library-expanded || !fx-bar-visible || player || prep ? 0px : four ? 96px : 68px;
+                visible: !library-expanded && fx-bar-visible && !player && !prep;
             }
 
-            Rectangle { height: !library-expanded && fx-bar-visible && !player && !prep && !two-deck ? 1px : 0px; }
+            Rectangle { height: !library-expanded && fx-bar-visible && !player && !prep ? 1px : 0px; }
 
             browser := Browser {
                 vertical-stretch: 1;

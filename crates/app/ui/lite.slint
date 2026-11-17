@@ -1,62 +1,32 @@
-// 2-Deck in 250 pt: each deck's header, the tempo fader under its cover
-// with SYNC, BPM and tempo % beside it, and next to that a row of tabs
-// (PADS, FX, LOOP, SAMPLER, X-Y FX) with CUE and PLAY, over the open
-// tab's panel. The slim mixer runs the full height between the decks. A
-// deck holding a Groove Box or an instrument shows the full deck instead
-// (see main.slint).
+// 2-Deck in 250 pt: each deck's header (100 pt), then one row under it,
+// from the outer edge in: the tempo fader with SYNC and the tempo % over
+// it, a small pad grid with its pages named across the top, the loop, and
+// the jog (its BPM is the deck's BPM readout) with PLAY and CUE under it.
+// The mixer runs the full height between the decks; the FX have their own
+// row (the FX bar). A deck holding a Groove Box or an instrument shows the
+// full deck instead (see main.slint).
 import { Theme } from "theme.slint";
-import { ControlButton, ControlFader, Controls, Crossfader, HeadphoneIcon, StereoMeter, SyncButton } from "controls.slint";
-import { DeckInfo, Header, Jog, LoopStepper, Pads, PlayButton, TempoPanelMenu } from "deck.slint";
-import { BeatFxSection, FxStack, XyFxPad } from "fxbar.slint";
-import { SamplerPanel } from "sampler.slint";
-import { Knob, ModeMenu, SideKnob } from "mixer.slint";
+import { ControlFader, Controls, SyncButton } from "controls.slint";
+import { DeckInfo, Header, JogSection, LoopSection, Pads, TempoPanelMenu } from "deck.slint";
 import { TrackDrag } from "library.slint";
-import { MapMark } from "mapmark.slint";
-import { TourMark } from "tourmark.slint";
 import { InstrumentsUi } from "instruments.slint";
 
-// The deck row's sizes and each deck's open tab.
 export global LiteUi {
-    // Header 100 + 1 + tab row 40 + 1 + panel 108.
+    // Header 100 + 1 + the row under it, 149.
     out property <length> deck-height: 250px;
-    out property <length> tab-row: 40px;
-    // The tempo column under the cover: as wide as the 88 pt cover and its
-    // margins.
-    out property <length> tempo-width: 100px;
-    // JOG on the top bar: a big jog on the inner side of each deck's header,
-    // as tall as the cover.
+    // The tempo column on the outer edge.
+    out property <length> tempo-width: 56px;
+    // The pad grid: small, as the pads never need to be big.
+    out property <length> pads-width: 250px;
+    // The mixer (Mixer with slim), which the Beat FX under it matches.
+    out property <length> mixer-width: 280px;
+    // The old JOG button's setting, kept for its saved value; the jog is
+    // always in the row now.
     in-out property <bool> jogs: false;
-    // The slim mixer (LiteMixer).
-    out property <length> mixer-width: 196px;
-    // Each deck's open tab: 0 PADS, 1 FX, 2 LOOP, 3 SAMPLER, 4 X-Y FX.
-    in-out property <int> tab-a: 0;
-    in-out property <int> tab-b: 0;
-    out property <[string]> tab-names: ["PADS", "FX", "LOOP", "SAMPLER", "X-Y FX"];
 }
 
-// With JOG on: a big jog beside the header on the mixer side, as tall as
-// the cover, with no text in it.
-component LiteJog inherits Rectangle {
-    in property <string> group;
-    in property <DeckInfo> info;
-    in property <color> tint;
-    in property <angle> spin;
-    background: Theme.panel;
-    width: self.height;
-    Jog {
-        group: group;
-        info: info;
-        tint: tint;
-        spin: spin;
-        plain: true;
-        width: parent.height - 12px;
-        height: self.width;
-    }
-}
-
-// One deck's tempo under its cover: the fader on the outer edge with 130
-// pt of travel, and beside it SYNC, the BPM and the tempo % (its menu
-// opens the tempo panel). Right-click the fader for key lock.
+// One deck's tempo on the outer edge: SYNC and the tempo % (its menu opens
+// the tempo panel) over the fader. Right-click the fader for key lock.
 component DeckTempo inherits Rectangle {
     in property <int> deck;
     in property <DeckInfo> info;
@@ -66,19 +36,13 @@ component DeckTempo inherits Rectangle {
     property <int> keylock-index: Controls.resolve(group, "keylock");
     background: Theme.panel;
     width: LiteUi.tempo-width;
-    HorizontalLayout {
+    VerticalLayout {
         padding: 5px;
         spacing: 4px;
-        if mirrored: VerticalLayout {
-            alignment: center;
-            spacing: 4px;
-            horizontal-stretch: 1;
-            SyncButton { group: group; tint: tint; menu-right-aligned: true; font-size: 11px; height: 26px; tour-id: group + ",sync_enabled"; }
-            Text { text: info.loaded ? info.bpm : "--"; color: Theme.text; font-size: 14px; font-weight: 600; font-family: "Inter Tabular"; horizontal-alignment: center; }
-            TempoPanelMenu { group: group; info: info; tint: tint; mirrored: true; }
-        }
+        SyncButton { group: group; tint: tint; menu-right-aligned: mirrored; font-size: 11px; height: 26px; tour-id: group + ",sync_enabled"; }
+        TempoPanelMenu { group: group; info: info; tint: tint; mirrored: mirrored; }
         Rectangle {
-            width: 40px;
+            vertical-stretch: 1;
             ControlFader {
                 width: 36px;
                 height: parent.height;
@@ -90,120 +54,6 @@ component DeckTempo inherits Rectangle {
                 glowing: Controls.value(keylock-index, Controls.tick) > 0;
                 context-menu(x, y) => { Controls.toggle(keylock-index); }
             }
-        }
-        if !mirrored: VerticalLayout {
-            alignment: center;
-            spacing: 4px;
-            horizontal-stretch: 1;
-            SyncButton { group: group; tint: tint; menu-right-aligned: false; font-size: 11px; height: 26px; tour-id: group + ",sync_enabled"; }
-            Text { text: info.loaded ? info.bpm : "--"; color: Theme.text; font-size: 14px; font-weight: 600; font-family: "Inter Tabular"; horizontal-alignment: center; }
-            TempoPanelMenu { group: group; info: info; tint: tint; mirrored: false; }
-        }
-    }
-}
-
-// The mini jog by PLAY: a dark disc whose one line turns with the
-// playhead, nothing written in it.
-component MiniJog inherits Rectangle {
-    in property <DeckInfo> info;
-    in property <angle> spin;
-    width: 34px;
-    height: 34px;
-    Rectangle {
-        border-radius: self.width / 2;
-        background: Theme.n-0a0a0b;
-        border-width: 2px;
-        border-color: Theme.n-48484c;
-    }
-    if info.loaded: Path {
-        width: parent.width;
-        height: parent.height;
-        viewbox-width: 100;
-        viewbox-height: 100;
-        stroke: Theme.n-9e9ea3;
-        stroke-width: 2.5px;
-        MoveTo { x: 50 + 16 * sin(spin); y: 50 - 16 * cos(spin); }
-        LineTo { x: 50 + 40 * sin(spin); y: 50 - 40 * cos(spin); }
-    }
-    Rectangle {
-        width: 10px;
-        height: 10px;
-        border-radius: 5px;
-        background: Theme.n-2a2a2d;
-    }
-}
-
-// A deck tab's name: lit when open.
-component DeckTab inherits Rectangle {
-    in property <string> text;
-    in property <bool> on;
-    in property <color> tint;
-    callback clicked();
-    height: 26px;
-    border-radius: Theme.radius;
-    background: on ? Theme.control : ta.has-hover ? Theme.n-1d1d20 : transparent;
-    border-width: on ? 1px : 0px;
-    border-color: Theme.border;
-    HorizontalLayout {
-        padding-left: 8px;
-        padding-right: 8px;
-        Text { text: root.text; color: on ? Theme.text : ta.has-hover ? Theme.text : Theme.text-dim; font-size: 10px; font-weight: 700; letter-spacing: 0.4px; vertical-alignment: center; }
-    }
-    ta := TouchArea { mouse-cursor: pointer; clicked => { root.clicked(); } }
-}
-
-// The beat jump size with ‹ › to halve and double it, between jump back
-// and jump forward.
-component JumpStepper inherits Rectangle {
-    in property <string> group;
-    property <int> size-index: Controls.resolve(group, "beatjump_size");
-    property <float> size: Controls.value(size-index, Controls.tick);
-    border-radius: Theme.radius;
-    background: Theme.control;
-    border-width: 1px;
-    border-color: Theme.border;
-    clip: true;
-    HorizontalLayout {
-        ControlButton { group: group; key: "beatjump_backward"; text: "◀"; momentary: true; font-size: 12px; width: 34px; }
-        Rectangle { width: 1px; background: Theme.border; }
-        Rectangle {
-            width: 22px;
-            Text { text: "‹"; color: Theme.text; font-size: 16px; }
-            TouchArea { mouse-cursor: pointer; clicked => { Controls.set-value(size-index, max(0.0625, size / 2)); } }
-        }
-        Text { horizontal-stretch: 1; text: size >= 1 ? round(size) : "1/" + round(1 / max(size, 0.0625)); color: Theme.text; font-size: 14px; font-family: "Inter Tabular"; horizontal-alignment: center; vertical-alignment: center; }
-        Rectangle {
-            width: 22px;
-            Text { text: "›"; color: Theme.text; font-size: 16px; }
-            TouchArea { mouse-cursor: pointer; clicked => { Controls.set-value(size-index, min(64, size * 2)); } }
-        }
-        Rectangle { width: 1px; background: Theme.border; }
-        ControlButton { group: group; key: "beatjump_forward"; text: "▶"; momentary: true; font-size: 12px; width: 34px; }
-    }
-}
-
-// The LOOP tab: the loop length with IN and OUT, and beat jump.
-component LoopTab inherits Rectangle {
-    in property <string> group;
-    in property <DeckInfo> info;
-    VerticalLayout {
-        alignment: center;
-        spacing: 8px;
-        HorizontalLayout {
-            alignment: center;
-            spacing: 8px;
-            height: 32px;
-            Text { text: "LOOP"; width: 40px; color: Theme.text-dim; font-size: 9px; font-weight: 700; letter-spacing: 0.5px; vertical-alignment: center; }
-            LoopStepper { group: group; info: info; width: 150px; }
-            ControlButton { group: group; key: "loop_in"; light-key: "loop_in_pending"; text: "IN"; momentary: true; tint: Theme.n-d1d1d6; font-size: 11px; width: 54px; tour-id: group + ",loop_in"; }
-            ControlButton { group: group; key: "loop_out"; light-key: "loop_enabled"; text: "OUT"; momentary: true; tint: Theme.lilac; font-size: 11px; width: 54px; tour-id: group + ",loop_out"; }
-        }
-        HorizontalLayout {
-            alignment: center;
-            spacing: 8px;
-            height: 32px;
-            Text { text: "JUMP"; width: 40px; color: Theme.text-dim; font-size: 9px; font-weight: 700; letter-spacing: 0.5px; vertical-alignment: center; }
-            JumpStepper { group: group; width: 270px; }
         }
     }
 }
@@ -218,7 +68,6 @@ export component LiteDeck inherits Rectangle {
     out property <length> overview-height: header.overview-height;
     property <string> group: "[Channel" + (deck + 1) + "]";
     property <color> tint: Theme.deck-color(deck);
-    property <int> tab: deck == 0 ? LiteUi.tab-a : LiteUi.tab-b;
     // Files dragged in from Finder or a file manager (see TrackDrag.files-over).
     property <bool> under-files: TrackDrag.files-x >= self.absolute-position.x && TrackDrag.files-x < self.absolute-position.x + self.width
         && TrackDrag.files-y >= self.absolute-position.y && TrackDrag.files-y < self.absolute-position.y + self.height;
@@ -244,72 +93,24 @@ export component LiteDeck inherits Rectangle {
     }
     VerticalLayout {
         spacing: 1px;
-        HorizontalLayout {
-            spacing: 1px;
-            if mirrored && LiteUi.jogs: LiteJog { group: group; info: info; tint: tint; spin: spin; height: header.height; }
-            header := Header { deck: deck; info: info; overview: overview; mirrored: mirrored; group: group; beat-counter: false; slim: true; horizontal-stretch: 1; }
-            if !mirrored && LiteUi.jogs: LiteJog { group: group; info: info; tint: tint; spin: spin; height: header.height; }
-        }
+        header := Header { deck: deck; info: info; overview: overview; mirrored: mirrored; group: group; beat-counter: false; slim: true; }
         HorizontalLayout {
             spacing: 1px;
             vertical-stretch: 1;
             if !mirrored: DeckTempo { deck: deck; info: info; }
-            VerticalLayout {
-                spacing: 1px;
+            Rectangle {
+                background: Theme.panel;
                 horizontal-stretch: 1;
-                // The tabs on the outer side, CUE and PLAY by the mixer.
-                Rectangle {
-                    background: Theme.panel;
-                    height: LiteUi.tab-row;
-                    HorizontalLayout {
-                        padding-left: 6px;
-                        padding-right: 6px;
-                        spacing: 4px;
-                        if mirrored && !LiteUi.jogs: VerticalLayout { alignment: center; MiniJog { info: info; spin: spin; } }
-                        if mirrored: VerticalLayout { alignment: center; PlayButton { group: group; tint: tint; width: 64px; height: 30px; tour-id: group + ",play"; } }
-                        if mirrored: VerticalLayout { alignment: center; ControlButton { group: group; key: "cue_default"; text: "CUE"; momentary: true; tint: tint; outline-when-lit: true; font-size: 13px; width: 64px; height: 30px; } }
-                        if mirrored: Rectangle { horizontal-stretch: 1; }
-                        for name[i] in LiteUi.tab-names: VerticalLayout {
-                            alignment: center;
-                            DeckTab {
-                                text: name;
-                                tint: tint;
-                                on: tab == i;
-                                clicked => {
-                                    if deck == 0 {
-                                        LiteUi.tab-a = i;
-                                    } else {
-                                        LiteUi.tab-b = i;
-                                    }
-                                }
-                            }
-                        }
-                        if !mirrored: Rectangle { horizontal-stretch: 1; }
-                        if !mirrored: VerticalLayout { alignment: center; ControlButton { group: group; key: "cue_default"; text: "CUE"; momentary: true; tint: tint; outline-when-lit: true; font-size: 13px; width: 64px; height: 30px; } }
-                        if !mirrored: VerticalLayout { alignment: center; PlayButton { group: group; tint: tint; width: 64px; height: 30px; tour-id: group + ",play"; } }
-                        if !mirrored && !LiteUi.jogs: VerticalLayout { alignment: center; MiniJog { info: info; spin: spin; } }
-                    }
-                }
-                // The open tab.
-                Rectangle {
-                    background: Theme.panel;
-                    vertical-stretch: 1;
-                    if tab == 0: HorizontalLayout {
-                        padding: 4px;
-                        Pads { deck: deck; group: group; info: info; horizontal-stretch: 1; }
-                    }
-                    if tab == 1: HorizontalLayout {
-                        spacing: 1px;
-                        if mirrored: BeatFxSection { width: 254px; }
-                        FxStack { deck: deck; }
-                        if !mirrored: BeatFxSection { width: 254px; }
-                    }
-                    if tab == 2: LoopTab { group: group; info: info; }
-                    if tab == 3: HorizontalLayout {
-                        padding: 4px;
-                        SamplerPanel { bank: Controls.value(Controls.resolve(group, "sampler_page"), Controls.tick); }
-                    }
-                    if tab == 4: XyFxPad { deck: deck; }
+                HorizontalLayout {
+                    padding: 6px;
+                    spacing: 10px;
+                    if !mirrored: Pads { deck: deck; group: group; info: info; tab-font: 9px; width: LiteUi.pads-width; }
+                    if mirrored: JogSection { group: group; mirrored: true; info: info; tint: tint; spin: spin; }
+                    Rectangle { horizontal-stretch: 1; }
+                    LoopSection { group: group; info: info; tint: tint; mirrored: mirrored; }
+                    Rectangle { horizontal-stretch: 1; }
+                    if !mirrored: JogSection { group: group; info: info; tint: tint; spin: spin; }
+                    if mirrored: Pads { deck: deck; group: group; info: info; tab-font: 9px; width: LiteUi.pads-width; }
                 }
             }
             if mirrored: DeckTempo { deck: deck; info: info; mirrored: true; }
@@ -320,117 +121,5 @@ export component LiteDeck inherits Rectangle {
         border-width: drop.has-drag || files-here ? 3px : 2px;
         border-color: drop.has-drag || files-here ? tint : tint.transparentize(0.55);
         background: drop.has-drag || files-here ? tint.transparentize(0.9) : transparent;
-    }
-}
-
-// Headphone cue under a channel fader: just the icon, lilac while on.
-component LiteCue inherits Rectangle {
-    in property <string> group;
-    property <int> index: Controls.resolve(group, "pfl");
-    property <bool> lit: Controls.value(index, Controls.tick) > 0;
-    width: 30px;
-    height: 18px;
-    HeadphoneIcon { size: 16px; tint: lit ? Theme.accent : touch.has-hover ? Theme.text : Theme.text-dim; }
-    touch := TouchArea {
-        mouse-cursor: pointer;
-        clicked => { Controls.set-value(index, lit ? 0 : 1); }
-    }
-    TourMark { id: group + ",pfl"; }
-    MapMark { key: group + ",pfl"; }
-}
-
-// A channel by the meters: a small gain knob on top of a short fader, with
-// the headphone cue under it.
-component LiteChannel inherits VerticalLayout {
-    in property <string> group;
-    in property <color> tint;
-    in property <length> knob: 16px;
-    spacing: 2px;
-    Knob { group: group; key: "pregain"; size: knob; tour-id: group + ",pregain"; }
-    HorizontalLayout {
-        alignment: center;
-        vertical-stretch: 1;
-        ControlFader { group: group; key: "volume"; tint: tint; ticks: 7; width: 30px; tour-id: group + ",volume"; }
-    }
-    LiteCue { group: group; }
-}
-
-// The EQ knobs down one side (or stems or sculpt), smaller than in 2-Deck;
-// the filter is by the crossfader.
-component LiteSide inherits VerticalLayout {
-    in property <int> deck;
-    in property <length> size: 16px;
-    width: 36px;
-    alignment: space-between;
-    for place in 3: SideKnob { deck: deck; place: place; size: size; }
-}
-
-// The slim mixer: the EQ knobs down the outsides, gain over each fader and
-// the headphone cue under it, the knob mode over the meters right between
-// the faders, and the crossfader along the bottom with a bigger filter
-// knob either side. As wide as 2-Deck's, so the Beat FX
-// under it lines up. Tall when the pads show: it then runs down between the
-// two halves of the pad bar, with bigger knobs and longer faders.
-export component LiteMixer inherits Rectangle {
-    property <length> knob: 22px;
-    background: Theme.panel;
-    width: LiteUi.mixer-width;
-    VerticalLayout {
-        padding: 4px;
-        padding-top: 4px;
-        spacing: 2px;
-        HorizontalLayout {
-            vertical-stretch: 1;
-            LiteSide { deck: 0; size: knob; }
-            HorizontalLayout {
-                horizontal-stretch: 1;
-                alignment: center;
-                spacing: 2px;
-                LiteChannel { group: "[Channel1]"; tint: Theme.deck1; knob: knob; }
-                VerticalLayout {
-                    spacing: 3px;
-                    width: 34px;
-                    ModeMenu { height: 16px; }
-                    HorizontalLayout {
-                        alignment: center;
-                        spacing: 4px;
-                        vertical-stretch: 1;
-                        StereoMeter { group: "[Channel1]"; }
-                        StereoMeter { group: "[Channel2]"; }
-                    }
-                }
-                LiteChannel { group: "[Channel2]"; tint: Theme.deck2; knob: knob; }
-            }
-            LiteSide { deck: 1; size: knob; }
-        }
-        HorizontalLayout {
-            spacing: 4px;
-            SideKnob { deck: 0; place: 3; size: 28px; width: 36px; cfx-arrow-left: true; cfx-boxed: false; cfx-raise: 8px; }
-            Rectangle {
-                horizontal-stretch: 1;
-                Crossfader { x: 4px; width: parent.width - 8px; height: 22px; tour-id: "[Master],crossfader"; }
-            }
-            SideKnob { deck: 1; place: 3; size: 28px; width: 36px; cfx-arrow-left: false; cfx-boxed: false; cfx-raise: 8px; }
-        }
-    }
-}
-
-// One deck's pads in the pads layer, under that deck: tabs over two rows of
-// four, as on most controllers. The loop is in row 1.
-export component PadBarHalf inherits Rectangle {
-    in property <int> deck;
-    in property <DeckInfo> info;
-    in property <bool> mirrored;
-    property <string> group: "[Channel" + (deck + 1) + "]";
-    property <color> tint: Theme.deck-color(deck);
-    background: Theme.panel;
-    horizontal-stretch: 1;
-    min-width: 0px;
-    HorizontalLayout {
-        padding: 6px;
-        padding-left: 8px;
-        padding-right: 8px;
-        spacing: 10px;
-        Pads { deck: deck; group: group; info: info; horizontal-stretch: 1; }
     }
 }

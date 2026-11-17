@@ -657,14 +657,16 @@ export component CueHeadphones inherits Rectangle {
     in property <color> tint: Theme.accent;
     property <int> index: Controls.resolve(group, "pfl");
     property <bool> lit: Controls.value(index, Controls.tick) > 0;
-    property <color> icon-color: lit ? #ffffff : touch.has-hover ? Theme.text : Theme.text-dim;
+    // Just the icon, no button round it, lilac while cueing (2-Deck).
+    in property <bool> plain;
+    property <color> icon-color: plain ? (lit ? Theme.accent : touch.has-hover ? Theme.text : Theme.text-dim) : lit ? #ffffff : touch.has-hover ? Theme.text : Theme.text-dim;
     // A button as wide as a channel fader, lit while cueing.
     width: 36px;
     height: 22px;
     border-radius: Theme.radius;
-    border-width: 1px;
+    border-width: plain ? 0px : 1px;
     border-color: lit ? root.tint : Theme.border;
-    background: lit ? root.tint : touch.pressed ? Theme.control-pressed : Theme.control;
+    background: plain ? transparent : lit ? root.tint : touch.pressed ? Theme.control-pressed : Theme.control;
     HeadphoneIcon { size: 16px; tint: icon-color; }
     touch := TouchArea {
         mouse-cursor: pointer;

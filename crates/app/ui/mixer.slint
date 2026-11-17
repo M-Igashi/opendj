@@ -577,14 +577,16 @@ export component ModeMenu inherits Rectangle {
 component Channel inherits VerticalLayout {
     in property <string> group;
     in property <color> tint;
+    // 2-Deck: a smaller gain knob and a plain headphone icon.
+    in property <bool> slim;
     spacing: 6px;
-    Knob { group: group; key: "pregain"; label: "GAIN"; size: 24px; }
+    Knob { group: group; key: "pregain"; label: "GAIN"; size: slim ? 20px : 24px; }
     HorizontalLayout {
         alignment: center;
         vertical-stretch: 1;
         ControlFader { group: group; key: "volume"; tint: tint; ticks: 11; width: 36px; tour-id: group + ",volume"; }
     }
-    HorizontalLayout { alignment: center; CueHeadphones { group: group; tint: tint; tour-id: group + ",pfl"; } }
+    HorizontalLayout { alignment: center; CueHeadphones { group: group; tint: tint; plain: slim; tour-id: group + ",pfl"; } }
 }
 
 // The four knobs down one side, spread over the mixer's height.
@@ -599,6 +601,7 @@ component SideColumn inherits VerticalLayout {
 // sculpt; see MixerMode), and between them gain, the channel faders with
 // the meters between them, and headphone cue.
 component ChannelGrid inherits HorizontalLayout {
+    in property <bool> slim;
     SideColumn { deck: 0; }
     HorizontalLayout {
         horizontal-stretch: 1;
@@ -606,7 +609,7 @@ component ChannelGrid inherits HorizontalLayout {
         // outside, by the knobs.
         alignment: center;
         spacing: 2px;
-        Channel { group: "[Channel1]"; tint: Theme.deck1; }
+        Channel { group: "[Channel1]"; tint: Theme.deck1; slim: slim; }
         // The knob mode menu over the meters, which are level with the
         // faders: below the gain knobs, above the cue buttons.
         VerticalLayout {
@@ -621,7 +624,7 @@ component ChannelGrid inherits HorizontalLayout {
                 StereoMeter { group: "[Channel2]"; }
             }
         }
-        Channel { group: "[Channel2]"; tint: Theme.deck2; }
+        Channel { group: "[Channel2]"; tint: Theme.deck2; slim: slim; }
     }
     SideColumn { deck: 1; }
 }
@@ -666,13 +669,16 @@ export component ExternalMixer inherits Rectangle {
 }
 
 export component Mixer inherits Rectangle {
+    // 2-Deck: about 10% wider, a smaller gain knob and plain headphone
+    // icons.
+    in property <bool> slim;
     background: Theme.panel;
     // The Beat FX under it in the FX bar matches this width.
-    width: 254px;
+    width: slim ? 280px : 254px;
     VerticalLayout {
         padding: 8px;
         spacing: 4px;
-        ChannelGrid { vertical-stretch: 1; }
+        ChannelGrid { vertical-stretch: 1; slim: slim; }
         // Along the bottom edge, as on a hardware mixer: the crossfader.
         // The levels are in the top bar's MASTER panel.
         HorizontalLayout {
