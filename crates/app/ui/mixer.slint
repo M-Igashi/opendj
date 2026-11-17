@@ -592,8 +592,11 @@ component Channel inherits VerticalLayout {
 // The four knobs down one side, spread over the mixer's height.
 component SideColumn inherits VerticalLayout {
     in property <int> deck;
+    // 2-Deck: spread top to bottom, so the filter sits lower and the gaps
+    // stay even.
+    in property <bool> slim;
     width: 48px;
-    alignment: space-around;
+    alignment: slim ? LayoutAlignment.space-between : LayoutAlignment.space-around;
     for place in 4: SideKnob { deck: deck; place: place; }
 }
 
@@ -602,7 +605,7 @@ component SideColumn inherits VerticalLayout {
 // the meters between them, and headphone cue.
 component ChannelGrid inherits HorizontalLayout {
     in property <bool> slim;
-    SideColumn { deck: 0; }
+    SideColumn { deck: 0; slim: slim; }
     HorizontalLayout {
         horizontal-stretch: 1;
         // Faders close in on the meters; what room is left goes on the
@@ -626,7 +629,7 @@ component ChannelGrid inherits HorizontalLayout {
         }
         Channel { group: "[Channel2]"; tint: Theme.deck2; slim: slim; }
     }
-    SideColumn { deck: 1; }
+    SideColumn { deck: 1; slim: slim; }
 }
 
 // Where Mixer goes while a hardware mixer does the mixing
@@ -669,12 +672,12 @@ export component ExternalMixer inherits Rectangle {
 }
 
 export component Mixer inherits Rectangle {
-    // 2-Deck: about 10% wider, a smaller gain knob and plain headphone
-    // icons.
+    // 2-Deck: 250 wide, a smaller gain knob, plain headphone icons and
+    // the knobs spread evenly down the full height.
     in property <bool> slim;
     background: Theme.panel;
     // The Beat FX under it in the FX bar matches this width.
-    width: slim ? 280px : 254px;
+    width: slim ? 250px : 254px;
     VerticalLayout {
         padding: 8px;
         spacing: 4px;

@@ -8,7 +8,7 @@
 // full deck instead (see main.slint).
 import { Theme } from "theme.slint";
 import { ControlFader, Controls, SyncButton } from "controls.slint";
-import { BeatCount, BeatCounter, DeckInfo, Header, JogSection, LoopSection, Pads, TempoPanelMenu } from "deck.slint";
+import { BeatCount, BeatCounter, DeckInfo, Header, JogSection, LoopSection, Pads, PitchSide, TempoPanelMenu } from "deck.slint";
 import { TrackDrag } from "library.slint";
 import { InstrumentsUi } from "instruments.slint";
 
@@ -16,18 +16,18 @@ export global LiteUi {
     // Header 100 + 1 + the row under it, 149.
     out property <length> deck-height: 250px;
     // The tempo column on the outer edge.
-    out property <length> tempo-width: 56px;
+    out property <length> tempo-width: 64px;
     // The pad grid: small, as the pads never need to be big.
     out property <length> pads-width: 250px;
     // The mixer (Mixer with slim), which the Beat FX under it matches.
-    out property <length> mixer-width: 280px;
+    out property <length> mixer-width: 250px;
     // The old JOG button's setting, kept for its saved value; the jog is
     // always in the row now.
     in-out property <bool> jogs: false;
 }
 
 // One deck's tempo on the outer edge: SYNC and the tempo % (its menu opens
-// the tempo panel) over the fader. Right-click the fader for key lock.
+// the tempo panel) over the fader, with the pitch reset triangle at 0%. Right-click the fader for key lock.
 component DeckTempo inherits Rectangle {
     in property <int> deck;
     in property <DeckInfo> info;
@@ -45,6 +45,7 @@ component DeckTempo inherits Rectangle {
         Rectangle {
             vertical-stretch: 1;
             ControlFader {
+                x: mirrored ? 0px : parent.width - self.width;
                 width: 36px;
                 height: parent.height;
                 group: group;
@@ -54,6 +55,14 @@ component DeckTempo inherits Rectangle {
                 tint: tint;
                 glowing: Controls.value(keylock-index, Controls.tick) > 0;
                 context-menu(x, y) => { Controls.toggle(keylock-index); }
+            }
+            // The pitch reset triangle at 0%, on the outer side.
+            PitchSide {
+                x: mirrored ? parent.width - self.width : 0px;
+                height: parent.height;
+                group: group;
+                tint: tint;
+                mirrored: mirrored;
             }
         }
     }
@@ -139,8 +148,8 @@ export component LiteDeck inherits Rectangle {
                 HorizontalLayout {
                     padding: 6px;
                     spacing: 10px;
-                    if !mirrored: Pads { deck: deck; group: group; info: info; tab-font: 9px; width: LiteUi.pads-width; }
-                    if mirrored: JogSection { group: group; mirrored: true; info: info; tint: tint; spin: spin; }
+                    if !mirrored: Pads { deck: deck; group: group; info: info; tab-font: 9px; pager: false; width: LiteUi.pads-width; }
+                    if mirrored: JogSection { bpm-only: true; group: group; mirrored: true; info: info; tint: tint; spin: spin; }
                     Rectangle { horizontal-stretch: 1; }
                     VerticalLayout {
                         alignment: end;
@@ -149,8 +158,8 @@ export component LiteDeck inherits Rectangle {
                         LoopSection { group: group; info: info; tint: tint; mirrored: mirrored; }
                     }
                     Rectangle { horizontal-stretch: 1; }
-                    if !mirrored: JogSection { group: group; info: info; tint: tint; spin: spin; }
-                    if mirrored: Pads { deck: deck; group: group; info: info; tab-font: 9px; width: LiteUi.pads-width; }
+                    if !mirrored: JogSection { bpm-only: true; group: group; info: info; tint: tint; spin: spin; }
+                    if mirrored: Pads { deck: deck; group: group; info: info; tab-font: 9px; pager: false; width: LiteUi.pads-width; }
                 }
             }
             if mirrored: DeckTempo { deck: deck; info: info; mirrored: true; }

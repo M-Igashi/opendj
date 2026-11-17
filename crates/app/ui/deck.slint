@@ -241,6 +241,8 @@ export component Jog inherits Rectangle {
     // Just the platter, progress ring and sticker, with no text (the
     // Player layout's small jogs).
     in property <bool> plain: false;
+    // Just the tempo % over the BPM, centred, with no clocks (2-Deck).
+    in property <bool> bpm-only: false;
     // Sized by the deck: it fills the space above the transport buttons.
     width: 104px;
     height: 104px;
@@ -341,7 +343,7 @@ export component Jog inherits Rectangle {
     // is centred; the app's font has digits all one width (SF on macOS,
     // Inter Tabular elsewhere), so the numbers don't jitter as they change.
     if !plain: Text {
-        y: parent.height / 2 - 27px * scale;
+        y: parent.height / 2 - (bpm-only ? 20px : 27px) * scale;
         height: 9px * scale;
         width: parent.width;
         text: info.rate;
@@ -354,12 +356,12 @@ export component Jog inherits Rectangle {
     // Click the tempo to edit the beat grid. A grid whose tempo changes
     // within the track shows a small dot beside it.
     if !plain: Text {
-        y: parent.height / 2 - 19px * scale;
+        y: parent.height / 2 - (bpm-only ? 11px : 19px) * scale;
         height: 20px * scale;
         width: parent.width;
         text: info.loaded ? info.bpm : "--";
         color: bta.has-hover && info.loaded ? Theme.lilac-text : Theme.text;
-        font-size: 16px * scale;
+        font-size: (bpm-only ? 18px : 16px) * scale;
         font-weight: 600;
         horizontal-alignment: center;
         vertical-alignment: center;
@@ -374,14 +376,14 @@ export component Jog inherits Rectangle {
     }
     if !plain && info.grid-sections > 1: Rectangle {
         x: parent.width / 2 + 27px * scale;
-        y: parent.height / 2 - 11px * scale;
+        y: parent.height / 2 - (bpm-only ? 3px : 11px) * scale;
         width: 4px * scale;
         height: 4px * scale;
         border-radius: 2px * scale;
         background: tint;
     }
     grid-menu := GridMenu { group: group; info: info; x: (parent.width - 240px) / 2; y: parent.height / 2; }
-    if !plain: Rectangle {
+    if !plain && !bpm-only: Rectangle {
         x: (parent.width - 44px * scale) / 2;
         y: parent.height / 2 + 3px * scale;
         width: 44px * scale;
@@ -390,7 +392,7 @@ export component Jog inherits Rectangle {
     }
     // Elapsed over remaining, right-aligned to each other so the digits
     // line up, and centred in the jog as one block.
-    if !plain: VerticalLayout {
+    if !plain && !bpm-only: VerticalLayout {
         x: (parent.width - self.preferred-width) / 2;
         y: parent.height / 2 + 5px * scale;
         width: self.preferred-width;
@@ -831,7 +833,7 @@ component TimeKey inherits HorizontalLayout {
         // Elapsed under the time left: small and grey, so the two
         // clocks don't read alike.
         property <int> secs: floor(info.progress * info.duration);
-        Text { text: info.loaded ? "+" + floor(secs / 60) + ":" + (Math.mod(secs, 60) < 10 ? "0" : "") + Math.mod(secs, 60) : ""; color: Theme.text-dim; font-size: 9.5px; horizontal-alignment: right; }
+        Text { text: info.loaded ? "+" + floor(secs / 60) + ":" + (Math.mod(secs, 60) < 10 ? "0" : "") + Math.mod(secs, 60) : ""; color: Theme.text-dim; font-size: 14px; horizontal-alignment: right; }
     }
     if show-time: EdgeVLine { top: 6px; bottom: 6px; line-color: Theme.n-2c2c2f; }
     KeyBox { group: group; info: info; tint: tint; compact: !show-time; }
@@ -2428,6 +2430,9 @@ component PadPager inherits Rectangle {
 export component Pads inherits HorizontalLayout {
     in property <int> deck;
     in property <length> tab-font: 10px;
+    // The ‹ › pager on the outer side (off on 2-Deck's small pads; each
+    // tab's menu still picks any page).
+    in property <bool> pager: true;
     in property <string> group;
     in property <DeckInfo> info;
     // Which tab is open, and the panel each of the eight tabs shows: the
@@ -2583,7 +2588,7 @@ export component Pads inherits HorizontalLayout {
     property <int> sampler-page-index: Controls.resolve(group, "sampler_page");
     property <int> sampler-page: Controls.value(sampler-page-index, Controls.tick);
     spacing: 4px;
-    PadPager {
+    if pager: PadPager {
         count: page == 3 ? 2 : 1;
         current: page == 3 ? sampler-page : 0;
         pick(p) => {
@@ -2782,7 +2787,7 @@ export component LoopSection inherits VerticalLayout {
 
 // The column beside the tempo fader: pitch reset at its middle, level
 // with 0%.
-component PitchSide inherits Rectangle {
+export component PitchSide inherits Rectangle {
     in property <string> group;
     in property <color> tint;
     in property <bool> mirrored;
@@ -3226,6 +3231,7 @@ export component SlipToggle inherits Rectangle {
 // top right corner and the pitch bend buttons in its lower corners.
 export component JogSection inherits VerticalLayout {
     in property <string> group;
+    in property <bool> bpm-only;
     in property <bool> mirrored;
     in property <DeckInfo> info;
     in property <color> tint;
@@ -3239,6 +3245,7 @@ export component JogSection inherits VerticalLayout {
             info: info;
             tint: tint;
             spin: spin;
+            bpm-only: bpm-only;
             width: min(parent.width, parent.height);
             height: self.width;
         }
