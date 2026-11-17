@@ -8,6 +8,7 @@
 
 mod backups;
 mod broadcasting;
+mod karaoke;
 mod keyboard;
 mod plugins;
 mod sources;
@@ -1569,6 +1570,7 @@ impl Prefs {
                         )
                     },
                 ]);
+                items.extend(self.karaoke_items());
                 items
             }
             _ => Vec::new(),
@@ -2764,6 +2766,10 @@ impl Prefs {
     }
 
     fn picked(&mut self, id: &str, index: usize) {
+        if karaoke::picked(id, index) {
+            self.refresh();
+            return;
+        }
         if crate::midi_clock::picked(id, index) {
             self.refresh();
             return;
