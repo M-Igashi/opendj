@@ -14,25 +14,34 @@ The timeline shows the whole set with its waveform and its tracks above
 it. Transitions, where two decks are heard at once, are shaded.
 
 - **Click** the waveform to play from there. The play button in the top
-  left plays and pauses. Playback goes to your main output.
+  left plays and pauses. Playback goes to your main output, read from the
+  file as it plays, so even a long set uses little memory.
 - **Drag** over the waveform to select a stretch, for **Trim** and
   **Cut**.
 - **Scroll**, or use **−** and **+**, to zoom. Drag the box in the small
   overview above the timeline to move around the set.
-- **Show decks** puts each deck on its own row, with its tracks, loops
-  and scratches. **Show moves** then adds lanes for the faders, EQs,
+- **Show decks**, on when a set opens, puts each deck on its own row,
+  with its tracks, loops and scratches. Turn it off for one waveform with
+  the tracks above it. **Show moves** then adds lanes for the faders, EQs,
   filters and effects, as you moved them.
 
 Every recording from openDJ 0.8 on comes with a control log that the
 editor reads all this from. An older recording, or one with its log
 missing, shows only its waveform and the tracklist from its cue sheet.
 
+## Tracks
+
+The **Tracks** tab, shown first, lists every track with the time it
+starts and how long it plays. The track playing is highlighted; click
+one to go to its start.
+
 ## Transitions
 
 The **Transitions** tab lists each transition with when it started, how
 long it lasted in bars and the style it was mixed in: **Cut**, **Bass
 swap**, **Filter**, **Echo out** or **Smooth**. Click one to hear it from
-4 bars before; the card above the list shows both tracks, where each was
+4 bars before to 4 bars after, then it stops; **Listen** plays it again.
+The card above the list shows both tracks, where each was
 in the track, and whether the beats stayed in time. **‹** and **›** step
 through them.
 
