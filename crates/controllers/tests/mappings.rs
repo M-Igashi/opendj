@@ -52,9 +52,9 @@ fn ddj_400_jog_bend_and_vinyl_mode() {
     let (reg, mut c) = load("Pioneer-DDJ-400.midi.xml");
     for channel in 0..2 {
         let group = format!("[Channel{}]", channel + 1);
-        // Rim and untouched platter send scaled signed ticks, never position nudges.
+        // Rim and untouched platter send signed ticks, never position nudges.
         for control in [0x21, 0x23] {
-            for (value, ticks) in [(65, 0.175), (63, -0.175), (64, 0.0)] {
+            for (value, ticks) in [(65, 1.0), (63, -1.0), (64, 0.0)] {
                 reg.get(&group, "jog_bend").unwrap().set(0.0);
                 c.receive(&[0xB0 + channel, control, value]);
                 assert_eq!(get(&reg, &group, "jog_bend"), ticks);
@@ -65,14 +65,18 @@ fn ddj_400_jog_bend_and_vinyl_mode() {
         c.receive(&[0x90 + channel, 0x36, 127]);
         assert_eq!(get(&reg, &group, "scratch2_enable"), 0.0);
         c.receive(&[0xB0 + channel, 0x22, 66]);
-        assert_eq!(get(&reg, &group, "jog_bend"), 0.35);
+        assert_eq!(get(&reg, &group, "jog_bend"), 2.0);
         c.receive(&[0x90 + channel, 0x36, 0]);
         reg.get(&group, "vinyl_mode").unwrap().set(1.0);
         c.receive(&[0x90 + channel, 0x36, 127]);
         assert_eq!(get(&reg, &group, "scratch2_enable"), 1.0);
         c.receive(&[0xB0 + channel, 0x22, 67]);
-        assert_eq!(get(&reg, &group, "jog_bend"), 0.35);
+        assert_eq!(get(&reg, &group, "jog_bend"), 2.0);
         assert_eq!(get(&reg, &group, "jog"), 0.0);
+        // The rim bends even while the deck is being scratched.
+        reg.get(&group, "jog_bend").unwrap().set(0.0);
+        c.receive(&[0xB0 + channel, 0x21, 61]);
+        assert_eq!(get(&reg, &group, "jog_bend"), -3.0);
         c.receive(&[0x90 + channel, 0x36, 0]);
     }
     assert_eq!(c.errors(), Vec::<String>::new());
@@ -94,7 +98,8 @@ fn ddj_400_slip_release_waits_for_wheel_stop() {
         // Timer creation uses wall time; feed movement over a real idle window.
         for _ in 0..10 {
             std::thread::sleep(Duration::from_millis(20));
-            c.receive(&[0xB0 + channel, 0x21, 63]);
+            // The platter spinning on after the hand let go.
+            c.receive(&[0xB0 + channel, 0x23, 63]);
             c.poll(Instant::now());
             assert_eq!(get(&reg, &group, "scratch2_enable"), 1.0);
         }
@@ -1710,6 +1715,76 @@ fn ddj_flx10_decks_mixer_fx_and_displays() {
 }
 
 #[test]
+fn ddj_flx10_pad_colours_lights_and_jog_scale() {
+    let (reg, mut c) = load("Pioneer-DDJ-FLX10.midi.xml");
+    settle(&mut c, 50);
+    c.take_output();
+
+    // A set hot cue lights its pad in the hot cue's colour, not white:
+    // hot cue 2 is green (21) on deck 1's HOT CUE pads.
+    reg.get("[Channel1]", "hotcue_2_status").unwrap().set(1.0);
+    settle(&mut c, 5);
+    let out = c.take_output();
+    assert!(
+        out.iter().any(|m| m[..] == [0x97, 0x01, 21]),
+        "hot cue 2 green: {out:x?}"
+    );
+
+    // ACTIVE PART: lit while the stems play, dimmed once muted.
+    reg.get("[Channel1]", "stem_count").unwrap().set(5.0);
+    settle(&mut c, 5);
+    let out = c.take_output();
+    assert!(
+        out.iter().any(|m| m[..] == [0x90, 0x0E, 0x7F]),
+        "VOCAL lit: {out:x?}"
+    );
+    c.receive(&[0x90, 0x0E, 0x7F]);
+    c.receive(&[0x90, 0x0E, 0x00]);
+    settle(&mut c, 5);
+    assert_eq!(get(&reg, "[Channel1_Stem4]", "mute"), 1.0);
+    let out = c.take_output();
+    assert_eq!(
+        out.iter()
+            .rev()
+            .find(|m| m[0] == 0x90 && m[1] == 0x0E)
+            .map(|m| m[2]),
+        Some(0x00),
+        "VOCAL dimmed: {out:x?}"
+    );
+
+    // The jog display shows the key: A minor is 2.
+    reg.get("[Channel1]", "track_loaded").unwrap().set(1.0);
+    reg.get("[Channel1]", "key").unwrap().set(22.0);
+    settle(&mut c, 100);
+    let out = c.take_output();
+    assert!(
+        out.iter().any(|m| m[..] == [0xB0, 0x49, 0x02]),
+        "key shown: {out:x?}"
+    );
+    // And the tempo: +4.0% is 1040 tenths above -100%.
+    reg.get("[Channel1]", "rateRange").unwrap().set(0.08);
+    reg.get("[Channel1]", "rate").unwrap().set(0.5);
+    // settle counts from now, so run past the last pass's timer.
+    settle(&mut c, 300);
+    let out = c.take_output();
+    assert!(
+        out.iter().any(|m| m[..] == [0xBF, 0x18, 8])
+            && out.iter().any(|m| m[..] == [0xBF, 0x38, 16]),
+        "tempo shown: {out:x?}"
+    );
+
+    // The big jog's rim: ten ticks bend as much as an FLX4 tick and a quarter.
+    c.receive(&[0xB0, 0x21, 64 + 10]);
+    let bend = get(&reg, "[Channel1]", "jog_bend");
+    assert!(
+        (bend - 10.0 * 720.0 / 5760.0).abs() < 1e-6,
+        "jog_bend {bend}"
+    );
+    assert_eq!(c.errors(), Vec::<String>::new());
+    c.shutdown();
+}
+
+#[test]
 fn ddj_400_secondary_pad_modes() {
     let (reg, mut c) = load("Pioneer-DDJ-400.midi.xml");
     for (deck, status) in [(1, 0x97), (2, 0x99)] {
@@ -1739,4 +1814,39 @@ fn ddj_400_secondary_pad_modes() {
         assert_eq!(get(&reg, &group, "pitch_adjust"), 1.0);
     }
     assert_eq!(c.errors(), Vec::<String>::new());
+}
+
+#[test]
+fn numark_ns4fx_sync_loops_and_crossfader_assign() {
+    let (reg, mut c) = load("Numark NS4FX.midi.xml");
+    settle(&mut c, 50);
+    c.take_output();
+    let version = |key: &str| reg.get("[Channel1]", key).unwrap().version();
+
+    // A tap of SYNC syncs once, every time.
+    for i in 0..3 {
+        let before = version("beatsync");
+        c.receive(&[0x90, 0x02, 0x7F]);
+        c.receive(&[0x80, 0x02, 0x00]);
+        assert_ne!(version("beatsync"), before, "tap {i} of SYNC syncs");
+    }
+    assert_eq!(get(&reg, "[Channel1]", "sync_enabled"), 0.0);
+
+    // 1/2 and x2 halve and double the loop, every time.
+    for key_note in [("loop_halve", 0x34), ("loop_double", 0x35)] {
+        for i in 0..3 {
+            let before = version(key_note.0);
+            c.receive(&[0x94, key_note.1, 0x7F]);
+            c.receive(&[0x84, key_note.1, 0x00]);
+            assert_ne!(version(key_note.0), before, "press {i} of {}", key_note.0);
+        }
+    }
+
+    // The A / off / B switch sets the deck's crossfader side.
+    c.receive(&[0xB0, 0x1E, 0x01]);
+    assert_eq!(get(&reg, "[Channel1]", "orientation"), 0.0);
+    c.receive(&[0xB0, 0x1E, 0x02]);
+    assert_eq!(get(&reg, "[Channel1]", "orientation"), 2.0);
+    c.receive(&[0xB0, 0x1E, 0x00]);
+    assert_eq!(get(&reg, "[Channel1]", "orientation"), 1.0);
 }

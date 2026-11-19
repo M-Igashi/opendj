@@ -24,8 +24,21 @@
 //  ACTIVE PART mutes and unmutes a deck's drums, vocals or instruments
 //  stems.
 //
-//  The jog displays show the playhead going round, the cue point, BPM and
-//  time, and light MASTER, SYNC and MASTER TEMPO.
+//  ACTIVE PART buttons are lit while their stems play and dim when muted.
+//
+//  The pads light in colours: hot cues in their colours, loops orange,
+//  rolls purple, stems in theirs.
+//
+//  The jog screens show BPM, time, key and tempo from MIDI. With the
+//  "Pioneer DDJ-FLX10 jog screens" HID mapping running too, they show the
+//  track's waveform instead, and that mapping draws everything on them.
+//
+//  The jog displays show the playhead going round, the cue point, BPM,
+//  time, the tempo, the key and its shift, and light MASTER, SYNC and
+//  MASTER TEMPO.
+//  They take no waveform over MIDI.
+//
+//  The jogs count 5760 ticks a turn (jogTicksPerTurn), not the FLX4's 720.
 //
 //  Not mapped yet: MIX POINT, CUE/LOOP MEMORY, MASTER CUE, INPUT SELECT, the
 //  mic, SAMPLER CUE and VOL, FX PART SELECT, the PITCH colour FX, the pad
@@ -72,6 +85,22 @@ PioneerDDJFLX10.padModeLights = {
 // Store timer IDs
 PioneerDDJFLX10.timers = {};
 
+// openDJ: the pads light in colours. A pad takes a colour number on a hue
+// wheel (1 blue, 21 green, 29 yellow, 41 red, 61 purple, 127 near white;
+// 0 dims it), as first charted for the FLX10 by Veezuhz.
+PioneerDDJFLX10.color = {
+    off: 0, blue: 1, azure: 9, cyan: 17, green: 21, yellow: 29, orange: 37,
+    red: 41, pink: 53, purple: 61, white: 127,
+};
+
+// Hot cues 1 to 8 in the colours the deck's pads show them in (blue,
+// green, yellow, orange, red, pink, purple, teal). The mapping file lights
+// the HOT CUE pads in these; keep them in step.
+PioneerDDJFLX10.hotcueColors = [9, 21, 29, 37, 41, 53, 61, 17];
+
+// The stems pads (see stemPads) in the colours the deck shows them in.
+PioneerDDJFLX10.stemPadColors = [21, 37, 41, 127, 1, 9, 127, 127];
+
 // Jog wheel constants
 // openDJ: whether touching the top scratches follows each deck's VINYL
 // switch ([ChannelN] vinyl_mode, on by default) instead of this constant.
@@ -81,8 +110,18 @@ PioneerDDJFLX10.vinylMode = function(deckNum) {
 PioneerDDJFLX10.alpha = 1.0/8;
 PioneerDDJFLX10.beta = PioneerDDJFLX10.alpha/32;
 
+// openDJ: the FLX10's big jogs send far more ticks a turn than the FLX4's
+// and FLX6's 720 this script was built from, so a small move scratched,
+// bent and searched many times too far. 5760 a turn (8 x 720), the figure
+// a community Mixxx mapping for the FLX10 scratches well with on the
+// hardware; everything below is scaled from it so a turn feels as it does
+// on the FLX4.
+PioneerDDJFLX10.jogTicksPerTurn = 5760;
+// What one FLX10 tick is worth in the FLX4's 720-a-turn ticks.
+PioneerDDJFLX10.jogScale = 720 / PioneerDDJFLX10.jogTicksPerTurn;
+
 // Multiplier for fast seek through track using SHIFT+JOGWHEEL
-// openDJ: half of Mixxx's 150, which searched too fast.
+// openDJ: half of Mixxx's 150, which searched too fast; per FLX4 tick.
 PioneerDDJFLX10.fastSeekScale = 75;
 
 PioneerDDJFLX10.tempoRanges = [0.06, 0.10, 0.16, 0.25];
@@ -188,6 +227,8 @@ PioneerDDJFLX10.init = function() {
 
         // Register callbacks for each deck, when the pitch shift is modified
         engine.makeConnection(group, "pitch_adjust", PioneerDDJFLX10.pitchAdjusted);
+        // openDJ: the KEYBOARD pads take the colour of the hot cue they play.
+        engine.makeConnection(group, "hotcue_focus", PioneerDDJFLX10.pitchAdjusted);
 
         engine.makeConnection(group, "sync_leader", PioneerDDJFLX10.syncLeaderLight);
         PioneerDDJFLX10.routePads(group);
@@ -204,8 +245,60 @@ PioneerDDJFLX10.init = function() {
         engine.makeConnection("[QuickEffectRack1_" + group + "]", "loaded_chain_preset", PioneerDDJFLX10.colorFxLights);
     });
     PioneerDDJFLX10.colorFxLights();
-    PioneerDDJFLX10.jogDisplays = [[-1, -1, -1, -1, -1], [-1, -1, -1, -1, -1], [-1, -1, -1, -1, -1], [-1, -1, -1, -1, -1]];
+    PioneerDDJFLX10.jogDisplays = PioneerDDJFLX10.decks.map(function() { return [-1, -1, -1, -1, -1, -1, -1, -1]; });
     PioneerDDJFLX10.jogDisplayTimer = engine.beginTimer(40, PioneerDDJFLX10.jogDisplayUpdate);
+
+    // openDJ: the jog screens' waveforms come over USB HID, from the
+    // "Pioneer DDJ-FLX10 jog screens" mapping; it says when it runs.
+    engine.makeConnection(PioneerDDJFLX10.screens, "running", PioneerDDJFLX10.screensRunning).trigger();
+};
+
+//
+// Jog screens over HID (openDJ)
+//
+
+// The HID mapping sets `running` while it drives the screens; this script
+// then puts the screens in HID mode with these SysEx messages, keeps them
+// there, and bumps `gate` so the HID mapping sends everything again. The
+// messages are those a DJ app sends to show waveforms, as found by the
+// people who worked out the FLX10's screens for Mixxx (Veezuhz, Loui1979).
+PioneerDDJFLX10.screens = "[DDJFLX10Screens]";
+PioneerDDJFLX10.screenSysex = (function() {
+    const head = [0xF0, 0x00, 0x40, 0x05, 0x00, 0x00, 0x04, 0x01, 0x00];
+    const msg = function(body) { return head.concat(body, [0xF7]); };
+    return {
+        session: [0xF0, 0x00, 0x20, 0x7F, 0x01, 0x02, 0x01, 0x01, 0x22, 0x0F, 0x0C, 0x06, 0x08,
+            0x04, 0x0A, 0x02, 0x02, 0x05, 0x00, 0x00, 0x0E, 0x0A, 0x0E, 0x03, 0x04, 0xF7],
+        enter: msg([0x03, 0x01]),
+        keepalive: msg([0x50, 0x31]),
+        deck: function(i) { return msg([0x11 + i, 0x00, 0x00, 0x02, 0x0E, 0x0E, 0x05]); },
+        globalB: msg([0x0B, 0x31, 0x00, 0x00, 0x00, 0x00, 0x00]),
+        globalC: msg([0x0C, 0x00, 0x00, 0x02, 0x0E, 0x0E, 0x05, 0x00, 0x01]),
+    };
+})();
+PioneerDDJFLX10.screenKeepalive = 0;
+
+PioneerDDJFLX10.screensRunning = function(value) {
+    const sysex = PioneerDDJFLX10.screenSysex;
+    const send = function(bytes) { midi.sendSysexMsg(bytes, bytes.length); };
+    if (PioneerDDJFLX10.screenKeepalive) {
+        engine.stopTimer(PioneerDDJFLX10.screenKeepalive);
+        PioneerDDJFLX10.screenKeepalive = 0;
+    }
+    if (value > 0) {
+        send(sysex.session);
+        send(sysex.enter);
+        for (let i = 0; i < 4; ++i) {
+            send(sysex.deck(i));
+        }
+        send(sysex.globalB);
+        send(sysex.globalC);
+        PioneerDDJFLX10.screenKeepalive = engine.beginTimer(340, function() { send(sysex.keepalive); });
+        engine.setValue(PioneerDDJFLX10.screens, "gate", engine.getValue(PioneerDDJFLX10.screens, "gate") + 1);
+    } else {
+        // Back to the MIDI displays: send all of them again.
+        PioneerDDJFLX10.jogDisplays = PioneerDDJFLX10.decks.map(function() { return [-1, -1, -1, -1, -1, -1, -1, -1]; });
+    }
 };
 
 //
@@ -246,15 +339,20 @@ PioneerDDJFLX10.degrees = function(seconds) {
 
 // The playhead marker, the cue point, BPM and time, sent when they change.
 PioneerDDJFLX10.jogDisplayUpdate = function() {
+    // While the HID mapping draws the screens it shows these too, and the
+    // two fight over the same places on the screen.
+    if (PioneerDDJFLX10.screenKeepalive) {
+        return;
+    }
     PioneerDDJFLX10.decks.forEach(function(group, i) {
         const loaded = engine.getValue(group, "track_loaded");
         const duration = engine.getValue(group, "duration");
         const seconds = engine.getValue(group, "playposition") * duration;
         let cue = 0x3FFF;
-        const rate = engine.getValue(group, "track_samplerate");
+        // openDJ: cue_point is in seconds.
         const point = engine.getValue(group, "cue_point");
-        if (loaded && rate > 0 && point >= 0) {
-            cue = PioneerDDJFLX10.degrees(point / rate / 2);
+        if (loaded && point >= 0) {
+            cue = PioneerDDJFLX10.degrees(point);
         }
         const left = Math.max(0, Math.floor(loaded ? seconds : 0));
         const now = [
@@ -263,6 +361,9 @@ PioneerDDJFLX10.jogDisplayUpdate = function() {
             loaded ? Math.min(9999, Math.round(engine.getValue(group, "bpm") * 10)) : 0,
             Math.min(99, Math.floor(left / 60)),
             left % 60,
+            loaded ? PioneerDDJFLX10.displayKey(engine.getValue(group, "key")) : 0,
+            0x0D + Math.max(-12, Math.min(12, Math.round(engine.getValue(group, "pitch_adjust")))),
+            PioneerDDJFLX10.displaySpeed(group),
         ];
         const last = PioneerDDJFLX10.jogDisplays[i];
         if (now[0] !== last[0]) { PioneerDDJFLX10.sendDisplay(0x10 + i, now[0]); }
@@ -270,8 +371,35 @@ PioneerDDJFLX10.jogDisplayUpdate = function() {
         if (now[2] !== last[2]) { PioneerDDJFLX10.sendDisplay(0x14 + i, now[2]); }
         if (now[3] !== last[3]) { midi.sendShortMsg(0xBF, 0x42 + 2 * i, now[3]); }
         if (now[4] !== last[4]) { midi.sendShortMsg(0xBF, 0x43 + 2 * i, now[4]); }
+        if (now[5] !== last[5]) { midi.sendShortMsg(0xB0 + i, 0x49, now[5]); }
+        if (now[6] !== last[6]) { midi.sendShortMsg(0xB0 + i, 0x4A, now[6]); }
+        if (now[7] !== last[7]) { PioneerDDJFLX10.sendDisplay(0x18 + i, now[7]); }
         PioneerDDJFLX10.jogDisplays[i] = now;
     });
+};
+
+// openDJ: the jog display's number for a key (the deck's `key`, numbered as
+// in Mixxx: 1-12 C to B major, 13-24 C to B minor), 0 for none. The
+// display goes up the majors a semitone at a time, each followed by its
+// relative minor: 1 C, 2 Am, 3 Db, 4 Bbm... 24 Abm.
+PioneerDDJFLX10.displayKey = function(key) {
+    key = Math.round(key);
+    if (key >= 1 && key <= 12) {
+        return (key - 1) * 2 + 1;
+    }
+    if (key >= 13 && key <= 24) {
+        // A minor key's relative major is a minor third above it.
+        return ((key - 13 + 3) % 12) * 2 + 2;
+    }
+    return 0;
+};
+
+// openDJ: the tempo for the jog display, -100.0% to +100.0% sent as tenths
+// of a percent above -100% (0 to 2000), as the community FLX10 mapping does.
+PioneerDDJFLX10.displaySpeed = function(group) {
+    const dir = engine.getValue(group, "rate_dir") < 0 ? -1 : 1;
+    const percent = engine.getValue(group, "rate") * engine.getValue(group, "rateRange") * dir * 100;
+    return Math.round((Math.max(-100, Math.min(100, percent)) + 100) * 10);
 };
 
 // MASTER TEMPO, MASTER and SYNC on the jog displays.
@@ -453,11 +581,31 @@ PioneerDDJFLX10.crossfaderAssign = function(_channel, control, value, _status, g
 // 2 bass, 3 instruments, 4 vocals, 5 hi-hats).
 PioneerDDJFLX10.activeParts = {0x0D: [1, 5], 0x0E: [4], 0x0F: [2, 3]};
 PioneerDDJFLX10.activePartPressed = function(_channel, control, value, _status, group) {
-    if (!value) { return; }
+    if (!value) {
+        // openDJ: the button lights itself while held; put back its light.
+        PioneerDDJFLX10.activePartLights(group);
+        return;
+    }
     const stems = PioneerDDJFLX10.activeParts[control];
     const muted = engine.getValue(PioneerDDJFLX10.stemGroup(group, stems[0]), "mute") ? 0 : 1;
     stems.forEach(function(stem) {
         engine.setValue(PioneerDDJFLX10.stemGroup(group, stem), "mute", muted);
+    });
+    PioneerDDJFLX10.activePartLights(group);
+};
+
+// openDJ: each ACTIVE PART button is lit while its stems play and dims
+// once they are muted, as in rekordbox; all three are dark when the track
+// has no stems.
+PioneerDDJFLX10.activePartLights = function(group) {
+    const channel = group.match(/\[Channel\d+/)[0] + "]";
+    const count = engine.getValue(channel, "stem_count");
+    Object.keys(PioneerDDJFLX10.activeParts).forEach(function(control) {
+        const stems = PioneerDDJFLX10.activeParts[control];
+        const playing = count >= 4 && stems.some(function(stem) {
+            return stem <= count && engine.getValue(PioneerDDJFLX10.stemGroup(channel, stem), "mute") <= 0.5;
+        });
+        midi.sendShortMsg(PioneerDDJFLX10.deckStatus(channel), Number(control), playing ? 0x7F : 0x00);
     });
 };
 
@@ -624,10 +772,13 @@ PioneerDDJFLX10.cycleTempoRange = function(_channel, _control, value, _status, g
 // Jog wheels
 //
 
-PioneerDDJFLX10.jogTurn = function(channel, _control, value, _status, group) {
+PioneerDDJFLX10.jogTurn = function(channel, control, value, _status, group) {
     const deckNum = channel + 1;
     // wheel center at 64; <64 rew >64 fwd
     let newVal = value - 64;
+    const ticks = newVal;
+    // openDJ: in the FLX4's ticks, for the loop points and the bend.
+    newVal *= PioneerDDJFLX10.jogScale;
 
     // loop_in / out adjust
     const loopEnabled = engine.getValue(group, "loop_enabled");
@@ -644,8 +795,11 @@ PioneerDDJFLX10.jogTurn = function(channel, _control, value, _status, group) {
         }
     }
 
-    if (engine.isScratching(deckNum)) {
-        engine.scratchTick(deckNum, newVal);
+    // openDJ: the rim (0x21) always bends, even while the deck is still
+    // easing back from a scratch, so twisting it never scratches.
+    if (control !== 0x21 && engine.isScratching(deckNum)) {
+        // Scratching counts the jog's own ticks (jogTicksPerTurn a turn).
+        engine.scratchTick(deckNum, ticks);
     } else {
         // openDJ: the rim (and the platter when not touched) bends the
         // speed while it turns, faster clockwise and slower
@@ -656,8 +810,10 @@ PioneerDDJFLX10.jogTurn = function(channel, _control, value, _status, group) {
 
 
 PioneerDDJFLX10.jogSearch = function(_channel, _control, value, _status, group) {
-    const newVal = (value - 64) * PioneerDDJFLX10.fastSeekScale;
-    engine.setValue(group, "jog", newVal);
+    const newVal = (value - 64) * PioneerDDJFLX10.jogScale * PioneerDDJFLX10.fastSeekScale;
+    // openDJ: SHIFT + turn moves the position (jog_search); plain jog bends
+    // the speed as in Mixxx.
+    engine.setValue(group, "jog_search", newVal);
 };
 
 PioneerDDJFLX10.jogTouch = function(channel, _control, value) {
@@ -670,7 +826,7 @@ PioneerDDJFLX10.jogTouch = function(channel, _control, value) {
     }
 
     if (value !== 0 && PioneerDDJFLX10.vinylMode(deckNum)) {
-        engine.scratchEnable(deckNum, 720, 33+1/3, this.alpha, this.beta);
+        engine.scratchEnable(deckNum, PioneerDDJFLX10.jogTicksPerTurn, 33+1/3, this.alpha, this.beta);
     } else {
         engine.scratchDisable(deckNum);
     }
@@ -906,10 +1062,14 @@ PioneerDDJFLX10.keyboardLights = function(group) {
         return;
     }
     const pitch = engine.getValue(group, "pitch_adjust");
+    // openDJ: in the colour of the hot cue the keys play, as on screen.
+    const focus = engine.getValue(group, "hotcue_focus");
+    const colour = focus >= 1 && focus <= 8
+        ? PioneerDDJFLX10.hotcueColors[focus - 1] : PioneerDDJFLX10.color.white;
     for (let i = 0; i < 8; i++) {
         const lit = Math.abs(PioneerDDJFLX10.keyboardSemitones[i] - pitch) < 0.01;
         PioneerDDJFLX10.stemsPadsModesStatus[group].forEach(function(status) {
-            midi.sendShortMsg(status, PioneerDDJFLX10.stemMutePadsFirstControl + i, lit ? 0x7F : 0x00);
+            midi.sendShortMsg(status, PioneerDDJFLX10.stemMutePadsFirstControl + i, lit ? colour : 0x00);
         });
     }
 };
@@ -1112,13 +1272,15 @@ PioneerDDJFLX10.stemMutePadShiftPressed = function(_channel, control, value, _st
 
 PioneerDDJFLX10.stemCountChanged = function(_value, group, _control) {
     const channel = group.match(/\[Channel\d+/)[0] + "]";
+    PioneerDDJFLX10.activePartLights(channel);
     if (!PioneerDDJFLX10.keyboardStems[channel]) {
         return;
     }
     for (let pad = 0; pad < 8; pad++) {
         const lit = PioneerDDJFLX10.stemPadLit(channel, PioneerDDJFLX10.stemPads[pad]);
+        const colour = PioneerDDJFLX10.stemPadColors[pad];
         PioneerDDJFLX10.stemsPadsModesStatus[channel].forEach(function(status) {
-            midi.sendShortMsg(status, PioneerDDJFLX10.stemMutePadsFirstControl + pad, lit ? 0x7F : 0x00);
+            midi.sendShortMsg(status, PioneerDDJFLX10.stemMutePadsFirstControl + pad, lit ? colour : 0x00);
         });
     }
 };
@@ -1263,6 +1425,9 @@ PioneerDDJFLX10.pitchPadShiftPressed = function(_channel, control, value, _statu
 
 PioneerDDJFLX10.shutdown = function() {
     engine.stopTimer(PioneerDDJFLX10.jogDisplayTimer);
+    if (PioneerDDJFLX10.screenKeepalive) {
+        engine.stopTimer(PioneerDDJFLX10.screenKeepalive);
+    }
 
     PioneerDDJFLX10.decks.forEach(function(group, i) {
         const status = PioneerDDJFLX10.deckStatus(group);

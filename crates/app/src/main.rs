@@ -27,8 +27,8 @@ use opendj_engine::{
 use opendj_library::Library;
 use opendj_plugins::source::{QueryKind, SourceQuery};
 use opendj_waveform::{
-    steady_grid, wgpu, Extras, Frame, GpuTrack, GridSection, Mode, Palette, PhraseKind,
-    WaveformRenderer, WaveformView, GRID_SECTIONS,
+    steady_grid, wgpu, Extras, Frame, GpuTrack, GridSection, Mode, Palette, PhraseKind, TempoLabel,
+    WaveformRenderer, WaveformView, GRID_SECTIONS, MAX_TEMPOS,
 };
 use slint::{ComponentHandle, Model, ModelRc, SharedString, VecModel};
 use smooth::{FrameStats, FrameTimer, SmoothClock};
@@ -62,6 +62,7 @@ mod instrument_knobs;
 mod instrument_midi;
 mod instrument_seq;
 mod instruments;
+mod karaoke_look;
 mod keep_going;
 mod lastfm;
 mod layouts;
@@ -100,6 +101,7 @@ mod settings;
 mod shortcuts;
 mod sleep_timer;
 mod smooth;
+mod sound_scan;
 mod soundcloud;
 mod sources;
 mod spotify;
@@ -118,6 +120,7 @@ mod update;
 mod vocal_pass;
 mod wall_clock;
 mod wave_look;
+mod wave_samples;
 mod waveform_height;
 mod waveform_zoom;
 mod waves;
@@ -877,6 +880,12 @@ fn run(graphics: Rc<graphics::Choice>) -> Result<(), Box<dyn std::error::Error>>
         });
     }
     let sources = sources::Sources::install(&app, library_path.clone());
+    browser.borrow_mut().play_sites = sources.borrow().playing_sites();
+    // An add-on that browses TIDAL's catalog signs in for the TIDAL source,
+    // so one sign-in lists, searches and plays.
+    if let Some(catalog) = sources.borrow().catalog("tidal") {
+        browser.borrow_mut().use_catalog("tidal", catalog);
+    }
     {
         // Spotify's "Open in Browser" and "Add to Downloads", the latter
         // when an add-on source searches Spotify links.
@@ -1027,7 +1036,28 @@ fn run(graphics: Rc<graphics::Choice>) -> Result<(), Box<dyn std::error::Error>>
     for key in settings::controllers_scaled() {
         opendj_controllers::pickup::set_scale(&key, true);
     }
+    for (key, feel) in settings::controller_jog_feel() {
+        opendj_controllers::jog_feel::set_feel(&key, feel);
+    }
     opendj_controllers::routing::load_deck_choices(settings::controller_decks());
+    // Controllers with screens (the DDJ-FLX10's jogs) draw the decks' waveforms.
+    {
+        let loaded = engine.loaded_tracks();
+        opendj_controllers::waves::set_source(Some(std::sync::Arc::new(
+            move |deck, per_second| {
+                let track = loaded
+                    .read()
+                    .ok()
+                    .and_then(|l| l.get(deck).cloned().flatten());
+                track.map_or_else(Vec::new, |t| {
+                    let w = &t.waveform;
+                    w.levels.first().map_or_else(Vec::new, |finest| {
+                        opendj_controllers::waves::resample(finest, w.bins_per_second, per_second)
+                    })
+                })
+            },
+        )));
+    }
     let controllers = match opendj_controllers::default_mappings_dir() {
         Some(dir) => Some(Rc::new(opendj_controllers::Controllers::start(
             registry.clone(),
@@ -1358,7 +1388,9 @@ fn run(graphics: Rc<graphics::Choice>) -> Result<(), Box<dyn std::error::Error>>
                         scrolling: std::array::from_fn(|_| make(Mode::Scrolling)),
                         overview: std::array::from_fn(|_| make(Mode::Overview)),
                         tracks: Default::default(),
+                        samples: Default::default(),
                         phrases: Default::default(),
+                        tempos: Default::default(),
                         clocks: Default::default(),
                         frame_timer: Default::default(),
                         frame_stats: Default::default(),
@@ -1644,10 +1676,18 @@ fn run(graphics: Rc<graphics::Choice>) -> Result<(), Box<dyn std::error::Error>>
                     browser.borrow_mut().add_recordings(&files);
                 }
                 browser.borrow_mut().poll_mix_export(&app);
+                browser.borrow_mut().poll_mixed_set(&app);
                 browser.borrow_mut().poll_streams();
                 browser.borrow_mut().poll_stores(&app);
                 for track in sources.borrow_mut().poll() {
                     browser.borrow_mut().add_imported(track);
+                }
+                for update in sources.borrow_mut().take_play_updates() {
+                    browser.borrow_mut().stream_update(update);
+                }
+                let plays = browser.borrow_mut().take_stream_plays();
+                for play in plays {
+                    sources.borrow_mut().play_link(play);
                 }
                 for path in sources.borrow_mut().take_loads() {
                     browser.borrow_mut().load_cached(&path);
@@ -1663,6 +1703,7 @@ fn run(graphics: Rc<graphics::Choice>) -> Result<(), Box<dyn std::error::Error>>
                 browser.borrow_mut().poll_inbox_albums();
                 browser.borrow_mut().poll_rekordbox_xml();
                 browser.borrow_mut().poll_covers();
+                browser.borrow_mut().poll_sounds();
                 browser.borrow_mut().poll_located();
                 browser.borrow_mut().poll_cleanup();
                 browser.borrow_mut().poll_files();
@@ -1706,6 +1747,7 @@ fn run(graphics: Rc<graphics::Choice>) -> Result<(), Box<dyn std::error::Error>>
                 );
                 b.learn_deck_phrases(&tracks);
                 b.learn_analysis(&tracks);
+                let fetches = b.deck_fetches();
                 b.poll_prep();
                 b.keep(&tracks, 0.016);
                 let mut host = browser::AutomixHost {
@@ -1760,6 +1802,16 @@ fn run(graphics: Rc<graphics::Choice>) -> Result<(), Box<dyn std::error::Error>>
                         let round = |f: f64| ((f * 2000.0).round() / 2000.0) as f32;
                         info.automix_from = round(from);
                         info.automix_to = round(to);
+                    }
+                    // A streamed track downloading to load here shows its
+                    // own name, and how it goes over the waveform.
+                    if let Some(f) = &fetches[d] {
+                        info.title = f.title.as_str().into();
+                        info.artist = f.artist.as_str().into();
+                        info.fetching = true;
+                        info.fetch_note = f.note.as_str().into();
+                        info.fetch_progress = f.progress;
+                        info.fetch_failed = f.failed;
                     }
                     if !deck_rows
                         .row_data(d)
@@ -2556,6 +2608,11 @@ impl Decks {
             // Filled in by the caller, which reads each file once.
             quality: Default::default(),
             lossless: false,
+            // Filled in by the caller, while a streamed track downloads.
+            fetching: false,
+            fetch_note: Default::default(),
+            fetch_progress: 0.0,
+            fetch_failed: false,
         }
     }
 
@@ -2598,6 +2655,7 @@ impl Decks {
             slip: Some(h.slip_position.get()).filter(|&s| s >= 0.0),
             gain: wave_look::gain_scale(h.pregain.get()),
             phrases,
+            tempos: Vec::new(),
         }
     }
 }
@@ -2659,6 +2717,10 @@ fn same_deck_info(old: &DeckInfo, new: &DeckInfo) -> bool {
 /// Where each phrase starts and its kind, as the waveforms draw them.
 type Phrases = Vec<(f64, PhraseKind)>;
 
+/// A track's tempo labels: where each is and its tempo (see
+/// `BeatGrid::tempo_labels`).
+type TempoLabels = Arc<[(f64, f64)]>;
+
 /// A track on the GPU, with the waveform, vocal levels and stem levels it
 /// came from.
 type Uploaded = (
@@ -2681,9 +2743,14 @@ struct Gpu {
     /// being analysed its waveform grows, and each new version is uploaded
     /// again, as it is once its vocals are found.
     tracks: [Option<Uploaded>; NUM_DECKS],
+    /// Each deck's decoded audio, for the real wave when zoomed right in.
+    samples: [Option<Arc<wave_samples::DeckSamples>>; NUM_DECKS],
     /// Each deck's phrases and the track they were found for, found again
     /// when the track changes (a new analysis or a grid edit replaces it).
     phrases: [Option<(Arc<Track>, Phrases)>; NUM_DECKS],
+    /// Each deck's tempo labels, the track and whether its grid was being
+    /// edited when they were picked (every marker then).
+    tempos: [Option<(Arc<Track>, bool, TempoLabels)>; NUM_DECKS],
     /// Each deck's drawn position, steadier than the engine's as read.
     clocks: [SmoothClock; NUM_DECKS],
     /// When each frame will show, steadier than when it is drawn.
@@ -2768,6 +2835,7 @@ impl Gpu {
             slip: None,
             gain: 1.0,
             phrases,
+            tempos: Vec::new(),
         };
         self.scrolling[d].set_lanes(w.lanes);
         self.scrolling[d].set_track(&self.device, &self.renderer, Some(&gpu));
@@ -2829,6 +2897,7 @@ impl Gpu {
             app.global::<PhraseView>().get_visible() && app.get_layout() != PLAYER_LAYOUT;
         // Phrase flags on the scrolling waveforms, live decks' included.
         let show_flags = app.global::<PhraseView>().get_waveform_visible();
+        let player = app.get_layout() == PLAYER_LAYOUT;
         let overview_background = if app.get_layout() == PLAYER_LAYOUT {
             PLAYER_OVERVIEW_BACKGROUND
         } else {
@@ -3048,8 +3117,8 @@ impl Gpu {
             // Grid edit mode (Prep's deck 1 always), while the grid is unlocked.
             let prep_deck = prep_shown && d == 0;
             let h = &decks.0[d];
-            self.scrolling[d]
-                .set_grid_edit((h.beats_edit.get_bool() || prep_deck) && !h.bpmlock.get_bool());
+            let grid_edit = (h.beats_edit.get_bool() || prep_deck) && !h.bpmlock.get_bool();
+            self.scrolling[d].set_grid_edit(grid_edit);
             if window.is_none() {
                 self.scrolling[d].set_lanes(None);
             }
@@ -3059,16 +3128,37 @@ impl Gpu {
                 continue;
             }
             // The overview's phrase bar, or the scrolling waveform's flags.
+            // With the scrolling waveform's tempo labels, where they show.
+            let tempos = match track {
+                Some(t) if wave_look::tempo_labels() => self.tempos(d, t, grid_edit),
+                _ => Arc::from([]),
+            };
             let scrolling_frame = frame.as_ref().map(|f| Frame {
                 phrases: flags,
+                tempos: tempo_labels_near(&tempos, f, f.visible_seconds, grid_edit),
                 ..f.clone()
             });
             // Size follows gain sizes the large waveform only: the overview
             // keeps its height.
             let overview_frame = frame.as_ref().map(|f| Frame {
                 gain: 1.0,
+                // Not on the Player's scrubber, nor while editing.
+                tempos: if grid_edit || player {
+                    Vec::new()
+                } else {
+                    tempo_labels_near(&tempos, f, f64::INFINITY, false)
+                },
                 ..f.clone()
             });
+            // The decoded audio, for the real wave up close.
+            let audio = track.and_then(|t| t.audio.as_ref());
+            let samples = match (audio, &self.samples[d]) {
+                (Some(a), Some(s)) if Arc::ptr_eq(a, s.audio()) => Some(s.clone()),
+                (Some(a), _) => Some(wave_samples::DeckSamples::new(a.clone())),
+                (None, _) => None,
+            };
+            self.samples[d] = samples.clone();
+            self.scrolling[d].set_samples(samples.map(|s| s as Arc<dyn opendj_waveform::Samples>));
             for (view, frame) in [
                 (&mut self.scrolling[d], scrolling_frame.as_ref()),
                 (&mut self.overview[d], overview_frame.as_ref()),
@@ -3148,6 +3238,19 @@ impl Gpu {
     /// Deck `d`'s phrases for the waveforms, found once per track: the
     /// library's until its waveform is ready, then found from the waveform
     /// and the grid as they are now.
+    /// Deck `d`'s tempo labels for `t`, every marker while `editing`;
+    /// picked again when the track or editing changes.
+    fn tempos(&mut self, d: usize, t: &Arc<Track>, editing: bool) -> TempoLabels {
+        match &self.tempos[d] {
+            Some((cached, e, l)) if Arc::ptr_eq(cached, t) && *e == editing => l.clone(),
+            _ => {
+                let l: TempoLabels = t.grid.tempo_labels(t.duration, editing).into();
+                self.tempos[d] = Some((t.clone(), editing, l.clone()));
+                l
+            }
+        }
+    }
+
     fn phrases(&mut self, d: usize, t: &Arc<Track>) -> Phrases {
         match &self.phrases[d] {
             Some((cached, p)) if Arc::ptr_eq(cached, t) => p.clone(),
@@ -3158,6 +3261,28 @@ impl Gpu {
             }
         }
     }
+}
+
+/// The tempo labels within `reach` seconds of the play position, at most
+/// as many as a waveform draws; to a tenth of a BPM while the grid is
+/// `editing`.
+fn tempo_labels_near(
+    labels: &[(f64, f64)],
+    f: &Frame,
+    reach: f64,
+    editing: bool,
+) -> Vec<TempoLabel> {
+    let (from, to) = (f.play_seconds - reach, f.play_seconds + reach);
+    labels
+        .iter()
+        .filter(|(s, _)| (from..to).contains(s))
+        .take(MAX_TEMPOS)
+        .map(|&(seconds, bpm)| TempoLabel {
+            seconds,
+            bpm,
+            tenths: editing,
+        })
+        .collect()
 }
 
 /// The tooltip for the phrase at `seconds`: its kind, then its length in

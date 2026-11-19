@@ -208,6 +208,9 @@ pub(crate) struct DeckControls {
     /// Jog rim ticks since the engine last looked, 720 to a turn: a pitch
     /// bend that follows how fast the rim turns. The engine zeroes it.
     pub(crate) jog_bend: ControlHandle,
+    /// Fast search steps (SHIFT + jog on openDJ's own Pioneer mappings):
+    /// each unit moves the play position by 10 ms, whether playing or not.
+    pub(crate) jog_search: ControlHandle,
     /// Fast seek speed while non-zero, in multiples of normal speed.
     pub(crate) rate_search: ControlHandle,
     /// rate_temp_up, rate_temp_down, rate_temp_up_small, rate_temp_down_small.
@@ -255,6 +258,10 @@ pub(crate) struct DeckControls {
     /// The loaded track's beat grid is locked (Mixxx's `bpmlock`): turning
     /// it on or off locks or unlocks the grid.
     pub(crate) bpmlock: ControlHandle,
+    /// The loaded track's grid mode (openDJ's own; see
+    /// [`crate::gridfit::GridMode::id`]): setting it fits the grid again in
+    /// that mode.
+    pub(crate) beats_mode: ControlHandle,
     /// Clicks on each beat of the grid, louder on bar 1 (openDJ's own), to
     /// check the grid by ear.
     pub(crate) metronome: ControlHandle,
@@ -490,8 +497,9 @@ impl DeckControls {
             scrub_enable: reg.toggle(g, "scrub_enable"),
             scrub_position: reg.create(g, "scrub_position", 0.0, 0.0, 1.0, Behavior::Linear),
             seek_hold: reg.toggle(g, "seek_hold"),
-            jog: reg.create(g, "jog", 0.0, -1000.0, 1000.0, Behavior::Free),
-            jog_bend: reg.create(g, "jog_bend", 0.0, -1000.0, 1000.0, Behavior::Free),
+            jog: reg.create(g, "jog", 0.0, -1e6, 1e6, Behavior::Free),
+            jog_bend: reg.create(g, "jog_bend", 0.0, -1e6, 1e6, Behavior::Free),
+            jog_search: reg.create(g, "jog_search", 0.0, -1e6, 1e6, Behavior::Free),
             rate_search: reg.create(g, "rateSearch", 0.0, -300.0, 300.0, Behavior::Free),
             rate_temp: ["up", "down", "up_small", "down_small"]
                 .map(|k| reg.push(g, &format!("rate_temp_{k}"))),
@@ -537,6 +545,7 @@ impl DeckControls {
             }),
             keylock: reg.toggle(g, "keylock"),
             bpmlock: reg.toggle(g, "bpmlock"),
+            beats_mode: reg.create(g, "beats_mode", 0.0, 0.0, 2.0, Behavior::Free),
             metronome: reg.toggle(g, "metronome"),
             beats_edit: reg.toggle(g, "beats_edit"),
             live_input: reg.create(
@@ -933,7 +942,9 @@ pub(crate) fn alias(
 }
 
 /// Detects presses of a momentary control. Also catches a press and release that
-/// both happened between two ticks, which a plain "was it down" check would miss.
+/// both happened between two ticks, which a plain "was it down" check would miss,
+/// and a press while still down (a write of 1 over 1, which counts as a release
+/// and a press).
 #[derive(Default, Clone, Copy)]
 pub(crate) struct Edge {
     down: bool,
@@ -944,9 +955,35 @@ impl Edge {
     pub(crate) fn pressed(&mut self, c: &ControlHandle) -> bool {
         let (down, version) = (c.get_bool(), c.version());
         let changes = version.wrapping_sub(self.version);
-        let pressed = (down && !self.down) || (!down && changes >= 2);
+        let pressed = (down && !self.down) || changes >= 2;
         self.down = down;
         self.version = version;
         pressed
+    }
+}
+
+#[cfg(test)]
+mod edge_tests {
+    use super::*;
+
+    #[test]
+    fn edge_sees_a_press_while_still_down() {
+        let reg = ControlRegistry::new();
+        let c = reg.push("[Channel1]", "beatsync");
+        let mut edge = Edge::default();
+        assert!(!edge.pressed(&c));
+        c.set(1.0);
+        assert!(edge.pressed(&c));
+        assert!(!edge.pressed(&c), "held is one press");
+        // Released and pressed again between two ticks.
+        c.set(0.0);
+        c.set(1.0);
+        assert!(edge.pressed(&c));
+        // Pressed and released between two ticks.
+        c.set(0.0);
+        assert!(!edge.pressed(&c));
+        c.set(1.0);
+        c.set(0.0);
+        assert!(edge.pressed(&c));
     }
 }

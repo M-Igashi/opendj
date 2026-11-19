@@ -17,6 +17,7 @@ pub mod format;
 pub mod hid;
 mod host;
 pub mod import;
+pub mod jog_feel;
 pub mod layout;
 pub mod learn;
 mod manager;
@@ -30,6 +31,7 @@ mod rows;
 mod script;
 pub mod support;
 pub mod view;
+pub mod waves;
 
 use std::path::PathBuf;
 

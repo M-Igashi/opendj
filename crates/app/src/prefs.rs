@@ -8,6 +8,7 @@
 
 mod backups;
 mod broadcasting;
+mod karaoke;
 mod keyboard;
 mod plugins;
 mod sources;
@@ -34,6 +35,7 @@ use opendj_control::ControlRegistry;
 use opendj_controllers::routing::{self, DeckChoice};
 use opendj_controllers::{is_system_port, own, Controllers, MappingChoice, Port};
 use opendj_engine::inputs::{DEFAULT_DUCK_STRENGTH, DUCK_AUTO};
+use opendj_engine::GridMode;
 use opendj_engine::{
     analysis, beatthis, cache, channel_names, deck_group, deck_outputs_split, engine,
     input_devices, key, meter, separation, AudioSetup, InputRole, InputRoute, RecordFormat,
@@ -164,10 +166,11 @@ const STORAGE: i32 = 23;
 /// The Room EQ editor (see room_eq.slint).
 const ROOM_EQ: i32 = 24;
 /// The Manage menu's clean-ups, in its order.
-const STORAGE_ACTIONS: [&str; 4] = [
+const STORAGE_ACTIONS: [&str; 5] = [
     "Clear analysis cache…",
     "Clear high quality stems…",
     "Clear played tracks…",
+    "Clear analyses of files gone…",
     "Show cache folder",
 ];
 /// A folder list's title icon in `chosen`: the sidebar's stage icons (its node
@@ -328,6 +331,7 @@ pub fn apply_saved(registry: &ControlRegistry) {
     analysis::set_bpm_range(lo, hi);
     key::set_detector(key_detector());
     beatthis::set_enabled(settings::flag("neural_beats", true));
+    opendj_engine::gridfit::set_default_mode(grid_mode());
     separation::set_on_load(settings::flag("stems_on_load", true));
     apply_stems_cache_limit();
     key::set_mixing(key_mixing());
@@ -425,6 +429,11 @@ fn key_mixing() -> key::Mixing {
 /// semitones.
 pub fn key_match_range() -> u8 {
     settings::number("key_match_on_load", 1.0).clamp(0.0, 2.0) as u8
+}
+
+/// How grids follow the tempo for tracks without a mode of their own.
+fn grid_mode() -> GridMode {
+    GridMode::from_name(&settings::string("grid_mode")).unwrap_or_default()
 }
 
 fn key_detector() -> key::Detector {
@@ -581,6 +590,8 @@ pub struct Prefs {
     plugins: Vec<Box<dyn Plugin>>,
     /// Whether each of `plugins` plays from a cache: the DJ's own server.
     plugin_plays: Vec<bool>,
+    /// openDJ's own services an add-on works behind ("tidal").
+    behind_services: Vec<&'static str>,
     /// The source open on Settings › Sources, by its place in the rail.
     open_source: Option<i32>,
     /// What the last Clear or Sign out on Settings › Sources did.
@@ -655,9 +666,19 @@ impl Prefs {
         let (chosen_tx, chosen_rx) = mpsc::channel();
         let (tested_tx, tested_rx) = mpsc::channel();
         let (backup_tx, backup_rx) = mpsc::channel();
+        // An add-on that works behind one of openDJ's own services (see
+        // `SearchSource::catalog`) shows as that service, not on its own.
+        let mut behind_services = Vec::new();
         let mut plugins: Vec<Box<dyn Plugin>> = crate::stores::configured()
             .into_iter()
             .filter(|p| !p.settings().is_empty())
+            .filter_map(|mut p| match p.source().and_then(|s| s.catalog()) {
+                Some(service) => {
+                    behind_services.push(service);
+                    None
+                }
+                None => Some(p),
+            })
             .collect();
         let plugin_plays = plugins
             .iter_mut()
@@ -692,6 +713,7 @@ impl Prefs {
             ports: Vec::new(),
             plugins,
             plugin_plays,
+            behind_services,
             open_source: None,
             sources_note: String::new(),
             rail_names: crate::browser::all_source_names(),
@@ -1316,6 +1338,23 @@ impl Prefs {
                         )
                     },
                     PrefItem {
+                        choices: strings(&["Fixed", "Auto", "Flexible"]),
+                        chosen: GridMode::ALL
+                            .iter()
+                            .position(|&m| m == grid_mode())
+                            .unwrap_or(1) as i32,
+                        ..item(
+                            "grid_mode",
+                            SEGMENTED,
+                            "Grids",
+                            "How grids follow the tempo. Auto keeps one tempo unless the \
+                             track drifts for a while. Fixed always keeps one. Flexible \
+                             follows the beats bar by bar, for live drums. \
+                             A track can have its own in Edit Grid or its right-click menu. \
+                             Edited and locked grids stay.",
+                        )
+                    },
+                    PrefItem {
                         choices: strings(&["Standard", "Neural"]),
                         chosen: key_detector().id() as i32,
                         ..item(
@@ -1564,11 +1603,12 @@ impl Prefs {
                             MENU,
                             "List waveforms",
                             "The small waveforms in the track list: shades of lilac, \
-                             or the full color of the deck waveforms (red lows, amber \
-                             mids, blue highs).",
+                             or the full color of the deck waveforms (deep red lows, \
+                             amber mids, ice-blue highs).",
                         )
                     },
                 ]);
+                items.extend(self.karaoke_items());
                 items
             }
             _ => Vec::new(),
@@ -2764,6 +2804,10 @@ impl Prefs {
     }
 
     fn picked(&mut self, id: &str, index: usize) {
+        if karaoke::picked(id, index) {
+            self.refresh();
+            return;
+        }
         if crate::midi_clock::picked(id, index) {
             self.refresh();
             return;
@@ -2771,6 +2815,26 @@ impl Prefs {
         if id == backup::EVERY_KEY {
             settings::set(id, json!(index));
             backup::run_if_due();
+            self.refresh();
+            return;
+        }
+        if let Some(t) = id
+            .strip_prefix("tag_merge:")
+            .and_then(|x| x.parse::<i64>().ok())
+        {
+            // The menu lists the group's other tags after its title.
+            let into = open_library()
+                .and_then(|db| db.tags_of_group(self.open_group?).ok())
+                .and_then(|tags| {
+                    tags.into_iter()
+                        .filter(|x| x.id != t)
+                        .nth(index.checked_sub(1)?)
+                });
+            if let Some(into) = into {
+                self.removing_tag = None;
+                with_library(|db| db.rename_tag(t, &into.name).map(|_| ()));
+                settings::tags_changed();
+            }
             self.refresh();
             return;
         }
@@ -2959,6 +3023,13 @@ impl Prefs {
                 };
                 settings::set("stems_cache_gb", json!(gb));
                 apply_stems_cache_limit();
+            }
+            "grid_mode" => {
+                let Some(&m) = GridMode::ALL.get(index) else {
+                    return;
+                };
+                settings::set("grid_mode", json!(m.name()));
+                opendj_engine::gridfit::set_default_mode(m);
             }
             "beat_detector" => {
                 let on = index == 1;

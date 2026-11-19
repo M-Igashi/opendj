@@ -564,7 +564,7 @@ PioneerDDJFLX6.cycleTempoRange = function(_channel, _control, value, _status, gr
 // Jog wheels
 //
 
-PioneerDDJFLX6.jogTurn = function(channel, _control, value, _status, group) {
+PioneerDDJFLX6.jogTurn = function(channel, control, value, _status, group) {
     const deckNum = channel + 1;
     // wheel center at 64; <64 rew >64 fwd
     let newVal = value - 64;
@@ -584,7 +584,9 @@ PioneerDDJFLX6.jogTurn = function(channel, _control, value, _status, group) {
         }
     }
 
-    if (engine.isScratching(deckNum)) {
+    // openDJ: the rim (0x21) always bends, even while the deck is still
+    // easing back from a scratch, so twisting it never scratches.
+    if (control !== 0x21 && engine.isScratching(deckNum)) {
         engine.scratchTick(deckNum, newVal);
     } else {
         // openDJ: the rim (and the platter when not touched) bends the
@@ -597,7 +599,9 @@ PioneerDDJFLX6.jogTurn = function(channel, _control, value, _status, group) {
 
 PioneerDDJFLX6.jogSearch = function(_channel, _control, value, _status, group) {
     const newVal = (value - 64) * PioneerDDJFLX6.fastSeekScale;
-    engine.setValue(group, "jog", newVal);
+    // openDJ: SHIFT + turn moves the position (jog_search); plain jog bends
+    // the speed as in Mixxx.
+    engine.setValue(group, "jog_search", newVal);
 };
 
 PioneerDDJFLX6.jogTouch = function(channel, _control, value) {

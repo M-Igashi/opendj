@@ -44,7 +44,13 @@ for all of them (10 GB unless you pick another); **Manage** under
 openDJ shows what you saved on a streaming service, but doesn't play its
 audio: a track plays on a deck when your collection holds the same track,
 and the others are greyed out. Double-click one to open it on the service's
-own site; SoundCloud tracks and Mixcloud shows also have a **▶** button
+own site, or, when an add-on that plays that service's tracks is
+installed, to download it through the add-on and load it onto a deck.
+Dragging it onto a deck, or **Download** when you right-click it, does
+the same. The deck shows the track's title and artist with the download's
+progress over its waveform until it loads. The file joins your collection
+in the **Inbox** and takes the streamed track's place in every list it
+stood in. SoundCloud tracks and Mixcloud shows also have a **▶** button
 (and **Play on…** when you right-click) that plays them there in your
 browser. Tracks are matched by ISRC when both sides have one, then by
 artist and title. If a match is wrong, right-click the track and pick
@@ -72,8 +78,18 @@ Each service is signed in to with your own app, so openDJ ships no keys:
 - **Spotify**: create an app at developer.spotify.com with the redirect URI
   `http://127.0.0.1:8898/callback` and paste its client ID.
 - **TIDAL**: create an app at developer.tidal.com with the same redirect
-  URI and the scopes `user.read`, `playlists.read` and `collection.read`,
-  and paste its client ID.
+  URI and the scopes `user.read`, `playlists.read`, `collection.read` and
+  `search.read`, and paste its client ID. If you signed in before search
+  came, sign in again. With an add-on that browses TIDAL installed, the
+  TIDAL source signs in through the add-on instead, so one sign-in lists
+  your playlists, searches and plays.
+
+  In the TIDAL source, typing in the search box opens a list of matching
+  artists, albums and tracks under it. Click an artist or album to see its
+  tracks, or a track to load it onto a deck; press ↵ to list every track
+  found. Clear the box to see the playlist again. TIDAL tracks show the
+  BPM and key TIDAL gives them before they are downloaded; once a track is
+  in the collection, openDJ's own analysis takes over.
 - **Apple Music**: needs an Apple Developer account. Under **Certificates,
   Identifiers & Profiles › Keys**, create a key with **MusicKit** and
   download its `.p8` file. Enter your Team ID, the key's Key ID and the
@@ -250,6 +266,35 @@ Tempos are kept within **BPM range** (**Settings › Analysis**, 60 to 180
 BPM unless you change it): a faster reading is halved, a slower one
 doubled.
 
+### Grid modes
+
+Each track's grid follows its tempo in one of three ways:
+
+- **Auto** (the default): one steady tempo unless the track really drifts
+  for a while, as described above.
+- **Fixed**: one tempo for the whole track, always. Use it when Auto split
+  a steady track into sections.
+- **Flexible**: the grid follows the beats bar by bar, so it stays on a live
+  drummer who pushes and pulls the tempo.
+
+Pick a track's mode in the **Edit Grid** popover or the grid menu
+(**Fixed · Auto · Flexible**), or right-click tracks in the list and choose
+**Grid**. The grid changes at once: openDJ keeps the beats it heard, so it
+doesn't need to listen again, and **Undo** brings the old grid back. Tracks
+without a mode of their own use **Grids** in **Settings › Analysis**. A
+locked grid keeps its grid whatever the mode. Search `grid:fixed` or
+`grid:flexible` to list the tracks set to a mode.
+
+Where the tempo changes, the scrolling waveform labels it: a gray tab with
+the new BPM, in whole numbers. A label only appears when the whole number
+changes and at least 16 bars after the last one, so a drifting track shows a
+few labels, not dozens; the first tempo is labelled too, so you can see
+where it went from. When the change comes on or within 2 beats of a phrase
+flag, the BPM joins the flag instead (**DROP · 124**). The overview marks
+each label with a small tick along its top. While you edit the grid, every
+tempo change is labelled, to a tenth of a BPM. Turn them off with **BPM
+labels** in the drop-down on the waveforms button.
+
 The grid menu (click the BPM on a deck) says where the grid came from:
 **Detected**, **Edited** or the app it was imported from. A detected grid
 that fits the beats poorly says **may be off, check by ear**. **Lock grid**
@@ -290,7 +335,8 @@ whatever zoom the waveform is at, and loading another track finishes it.
 In the [Prep layout](layouts.md) the grid is always open for editing while
 it is unlocked, and the metronome turns on by itself there and back off
 once the grid is locked. Controllers and keyboard shortcuts can use
-`edit_grid` (the `beats_edit` control).
+`edit_grid` (the `beats_edit` control), and set the grid mode with
+`beats_mode` (0 Auto, 1 Fixed, 2 Flexible).
 
 To analyse tracks yourself, right-click them and choose **Analyze Track**
 (or **Analyze 12 Tracks** when you picked several), or right-click a
@@ -380,7 +426,10 @@ Spotify and the other streaming services in rekordbox) have no file to
 play, so they stay in their lists as placeholders, in their place. A
 placeholder is greyed out and shows its service (**TIDAL**) where the album
 would be. It keeps the artist, title and length the app saved, and the
-service's own track id. Double-click one to open it on the service's site.
+service's own track id. Double-click one to open it on the service's site,
+or to download it and load it onto a deck through an add-on that plays that
+service's tracks (dragging it onto a deck works too). The download takes
+its place in the list.
 Lists made only of streamed tracks come in too, marked **online only** in
 the list picker.
 
@@ -563,10 +612,17 @@ Folder**, so folders can hold folders and a folder can hold both. Right-click
 a list for **Make It a Crate** or **Make It a Playlist** (a playlist that
 becomes a crate keeps each track once).
 
-Drag a crate, playlist or folder onto a folder to move it there, or onto
-the **Crates** or **Playlists** heading to take it back to the top (a
-crate's top is Crates, a playlist's is Playlists; a folder can go under
-either).
+Crates, playlists and folders stay in the order you put them. Drag one
+and a lilac line shows where it will land: drop it on the top or bottom
+edge of a row to put it before or after that row, or on the middle of a
+folder (outlined in lilac) to put it first inside. Hold it over a closed
+folder for a moment and the folder opens; near the top or bottom of the
+tree, the tree scrolls. Drop it on the **Crates** or **Playlists** heading
+to take it back to the top (a crate's top is Crates, a playlist's is
+Playlists; a folder can go under either). The list stays selected where it
+landed. Without dragging, right-click a list for **Move to…** (pick a
+folder or the top), **Move Up** or **Move Down**, or press ⌥⌘↑ / ⌥⌘↓
+(Ctrl+Alt+↑ / ↓ on Windows and Linux) while the tree has the keys.
 - **Imported**: other apps' lists (a folder per app) and **Groupings and
   Tags**. They are read-only, because the app's next import makes them
   again, so they show a padlock and dimmer names. To keep an app's lists as
@@ -583,6 +639,20 @@ the top. Type to find one, or pick **New crate** to make one with the
 tracks in it. **Show in playlist** lists the crates and playlists a track
 is in and opens the one you pick.
 
+Hold <kbd>⌥</kbd> (Alt on Windows and Linux) as you drop tracks dragged out
+of the open list or the Sidelist to **move** them: they go into the list
+you drop them on and leave the one they came from. The row you hover says
+**Add 3** or **Move 3**. A playlist leaves out tracks it already has; the
+note that says so has **Add them again** to add them anyway.
+
+To take tracks out of the open crate or playlist, pick them and press
+Delete, or right-click them for **Remove from this list**. A playlist listed
+by **#** (click the heading), with no search or filter on, can also be put
+in a new order by dragging its rows up or down.
+
+After each add, move or removal a note at the bottom of the list says what
+happened, with **Undo**; ⌘Z (Ctrl+Z) takes it back too.
+
 **Go to Artist** and **Go to Album** on the track menu show the whole
 collection narrowed to that artist (any track they're on) or album, with
 a chip on the filter bar; clear the chip to see everything again.
@@ -591,6 +661,22 @@ A track can be in as many crates as you like, and the **Crates** column
 (right-click a heading) shows which ones it is in. Search with
 `crate:yoga` for tracks in a crate with "yoga" in its name, `crate:=yoga`
 for that crate only, and `crate:""` for tracks in no crate yet.
+
+### The Sidelist
+
+The **Sidelist** tab of the side panel holds a list beside the track
+list, so you can build it while you browse anywhere else. It starts as a
+scratch pad, kept until you clear it, even after you quit. Drag tracks
+into it, or pick tracks and press <kbd>S</kbd>; drag its rows to change
+their order, and Delete takes the picked ones out.
+
+To work on one of your crates or playlists there instead, drag it from
+the tree onto the Sidelist tab, or right-click it and choose **Show in
+Sidelist**. The button by the Sidelist's title names the list it shows
+and switches to another, or back to the scratch pad. What you drop,
+reorder or take out there changes that list straight away. **Save
+scratch pad as playlist** at the bottom of that menu keeps the scratch
+pad as a playlist at the top of Playlists and starts a new, empty one.
 
 ### History
 

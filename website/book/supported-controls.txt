@@ -251,6 +251,7 @@
 [Channel1],beats_adjust_slower
 [Channel1],beats_downbeat_here
 [Channel1],beats_edit
+[Channel1],beats_mode
 [Channel1],beats_reset
 [Channel1],beats_scale_double
 [Channel1],beats_scale_half
@@ -360,6 +361,7 @@
 [Channel1],hotcue_focus
 [Channel1],jog
 [Channel1],jog_bend
+[Channel1],jog_search
 [Channel1],key
 [Channel1],keyboard_1_activate
 [Channel1],keyboard_2_activate
@@ -568,6 +570,7 @@
 [Channel2],beats_adjust_slower
 [Channel2],beats_downbeat_here
 [Channel2],beats_edit
+[Channel2],beats_mode
 [Channel2],beats_reset
 [Channel2],beats_scale_double
 [Channel2],beats_scale_half
@@ -677,6 +680,7 @@
 [Channel2],hotcue_focus
 [Channel2],jog
 [Channel2],jog_bend
+[Channel2],jog_search
 [Channel2],key
 [Channel2],keyboard_1_activate
 [Channel2],keyboard_2_activate
@@ -885,6 +889,7 @@
 [Channel3],beats_adjust_slower
 [Channel3],beats_downbeat_here
 [Channel3],beats_edit
+[Channel3],beats_mode
 [Channel3],beats_reset
 [Channel3],beats_scale_double
 [Channel3],beats_scale_half
@@ -994,6 +999,7 @@
 [Channel3],hotcue_focus
 [Channel3],jog
 [Channel3],jog_bend
+[Channel3],jog_search
 [Channel3],key
 [Channel3],keyboard_1_activate
 [Channel3],keyboard_2_activate
@@ -1202,6 +1208,7 @@
 [Channel4],beats_adjust_slower
 [Channel4],beats_downbeat_here
 [Channel4],beats_edit
+[Channel4],beats_mode
 [Channel4],beats_reset
 [Channel4],beats_scale_double
 [Channel4],beats_scale_half
@@ -1311,6 +1318,7 @@
 [Channel4],hotcue_focus
 [Channel4],jog
 [Channel4],jog_bend
+[Channel4],jog_search
 [Channel4],key
 [Channel4],keyboard_1_activate
 [Channel4],keyboard_2_activate
@@ -4510,6 +4518,7 @@
 [Playlist],SelectTrackKnob
 [Playlist],ToggleSelectedSidebarItem
 [PreviewDeck1],duration
+[PreviewDeck1],main
 [PreviewDeck1],play
 [PreviewDeck1],playposition
 [PreviewDeck1],track_loaded

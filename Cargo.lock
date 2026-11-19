@@ -979,6 +979,7 @@ dependencies = [
  "burn-router",
  "burn-store",
  "burn-wgpu",
+ "cubecl",
 ]
 
 [[package]]
@@ -1763,6 +1764,15 @@ name = "convert_case"
 version = "0.10.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "633458d4ef8c78b72454de2d54fd6ab2e60f9e02be22f3c6104cdc8a4e0fceb9"
+dependencies = [
+ "unicode-segmentation",
+]
+
+[[package]]
+name = "convert_case"
+version = "0.12.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "1af709f1f33454bf52eadfc8c78b3b9ef9cb26fb54d16dc9cd9a7299f899fd1b"
 dependencies = [
  "unicode-segmentation",
 ]
@@ -4484,6 +4494,7 @@ dependencies = [
  "cfg_aliases",
  "i-slint-common",
  "i-slint-core",
+ "i-slint-renderer-skia",
  "i-slint-renderer-software",
  "vtable",
 ]
@@ -6544,7 +6555,7 @@ dependencies = [
  "objc2-link-presentation",
  "objc2-quartz-core 0.2.2",
  "objc2-symbols",
- "objc2-uniform-type-identifiers",
+ "objc2-uniform-type-identifiers 0.2.2",
  "objc2-user-notifications",
 ]
 
@@ -6560,6 +6571,7 @@ dependencies = [
  "objc2-core-foundation",
  "objc2-foundation 0.3.2",
  "objc2-quartz-core 0.3.2",
+ "objc2-uniform-type-identifiers 0.3.2",
 ]
 
 [[package]]
@@ -6571,6 +6583,16 @@ dependencies = [
  "block2 0.5.1",
  "objc2 0.5.3",
  "objc2-foundation 0.2.2",
+]
+
+[[package]]
+name = "objc2-uniform-type-identifiers"
+version = "0.3.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "7902ac02859fc1f7045f8b598c63f1ae0cc7efeaa06a9bc9f3d9a3c955974fa4"
+dependencies = [
+ "objc2 0.6.5",
+ "objc2-foundation 0.3.2",
 ]
 
 [[package]]
@@ -6625,7 +6647,7 @@ dependencies = [
 
 [[package]]
 name = "opendj"
-version = "0.7.0"
+version = "0.8.0"
 dependencies = [
  "base64 0.22.1",
  "chrono",
@@ -6673,7 +6695,7 @@ dependencies = [
 
 [[package]]
 name = "opendj-broadcast"
-version = "0.7.0"
+version = "0.8.0"
 dependencies = [
  "base64 0.22.1",
  "mp3lame-encoder",
@@ -6689,11 +6711,11 @@ dependencies = [
 
 [[package]]
 name = "opendj-control"
-version = "0.7.0"
+version = "0.8.0"
 
 [[package]]
 name = "opendj-controllers"
-version = "0.7.0"
+version = "0.8.0"
 dependencies = [
  "base64 0.22.1",
  "hidapi",
@@ -6708,7 +6730,7 @@ dependencies = [
 
 [[package]]
 name = "opendj-engine"
-version = "0.7.0"
+version = "0.8.0"
 dependencies = [
  "beat-this",
  "chrono",
@@ -6738,7 +6760,7 @@ dependencies = [
 
 [[package]]
 name = "opendj-export"
-version = "0.7.0"
+version = "0.8.0"
 dependencies = [
  "base64 0.22.1",
  "chrono",
@@ -6759,8 +6781,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "opendj-karaoke-render"
+version = "0.8.0"
+dependencies = [
+ "image",
+ "slint",
+]
+
+[[package]]
 name = "opendj-library"
-version = "0.7.0"
+version = "0.8.0"
 dependencies = [
  "opendj-engine",
  "regex",
@@ -6770,7 +6800,7 @@ dependencies = [
 
 [[package]]
 name = "opendj-osc"
-version = "0.7.0"
+version = "0.8.0"
 dependencies = [
  "opendj-control",
  "rosc",
@@ -6778,7 +6808,7 @@ dependencies = [
 
 [[package]]
 name = "opendj-plugin-host"
-version = "0.7.0"
+version = "0.8.0"
 dependencies = [
  "block2 0.6.2",
  "clack-extensions",
@@ -6795,7 +6825,7 @@ dependencies = [
 
 [[package]]
 name = "opendj-plugins"
-version = "0.7.0"
+version = "0.8.0"
 dependencies = [
  "chrono",
  "md5",
@@ -6813,7 +6843,7 @@ dependencies = [
 
 [[package]]
 name = "opendj-remote"
-version = "0.7.0"
+version = "0.8.0"
 dependencies = [
  "getrandom 0.4.3",
  "if-addrs",
@@ -6825,14 +6855,14 @@ dependencies = [
 
 [[package]]
 name = "opendj-script"
-version = "0.7.0"
+version = "0.8.0"
 dependencies = [
  "opendj-control",
 ]
 
 [[package]]
 name = "opendj-separation"
-version = "0.7.0"
+version = "0.8.0"
 dependencies = [
  "burn",
  "burn-ndarray",
@@ -6845,8 +6875,24 @@ dependencies = [
 ]
 
 [[package]]
+name = "opendj-tablet"
+version = "0.8.0"
+dependencies = [
+ "objc2 0.6.5",
+ "objc2-avf-audio",
+ "objc2-foundation 0.3.2",
+ "objc2-ui-kit 0.3.2",
+ "objc2-uniform-type-identifiers 0.3.2",
+ "opendj-control",
+ "opendj-controllers",
+ "opendj-engine",
+ "slint",
+ "slint-build",
+]
+
+[[package]]
 name = "opendj-test-clap"
-version = "0.7.0"
+version = "0.8.0"
 dependencies = [
  "clack-extensions",
  "clack-plugin",
@@ -6854,14 +6900,14 @@ dependencies = [
 
 [[package]]
 name = "opendj-test-vst3"
-version = "0.7.0"
+version = "0.8.0"
 dependencies = [
  "vst3",
 ]
 
 [[package]]
 name = "opendj-waveform"
-version = "0.7.0"
+version = "0.8.0"
 dependencies = [
  "ab_glyph",
  "bytemuck",
@@ -7122,7 +7168,7 @@ dependencies = [
 
 [[package]]
 name = "phrase-bench"
-version = "0.7.0"
+version = "0.8.0"
 dependencies = [
  "opendj-engine",
  "opendj-library",
@@ -8111,6 +8157,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "a0a22bf72f515cc4189dd7c63d016f6de92a11eee98ddf7dd64794198f6eb34e"
 dependencies = [
  "rquickjs-core",
+ "rquickjs-macro",
 ]
 
 [[package]]
@@ -8125,11 +8172,27 @@ dependencies = [
 ]
 
 [[package]]
+name = "rquickjs-macro"
+version = "0.14.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "0a2ea9adb03b669c933482ff740b683cd36be7cef23891657a8ccb850401d286"
+dependencies = [
+ "convert_case 0.12.0",
+ "indexmap",
+ "proc-macro-crate",
+ "proc-macro2",
+ "quote",
+ "rquickjs-core",
+ "syn 3.0.8",
+]
+
+[[package]]
 name = "rquickjs-sys"
 version = "0.14.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "cee271d0eeba64f0915b846cb7ae02e16faf3dfdffdca91731101d9d30fe3423"
 dependencies = [
+ "bindgen 0.72.1",
  "cc",
 ]
 
@@ -8863,6 +8926,7 @@ dependencies = [
  "i-slint-core",
  "i-slint-core-macros",
  "i-slint-renderer-femtovg",
+ "i-slint-renderer-skia",
  "i-slint-renderer-software",
  "num-traits",
  "once_cell",
@@ -9147,7 +9211,7 @@ checksum = "a2eb9349b6444b326872e140eb1cf5e7c522154d69e7a0ffb0fb81c06b37543f"
 
 [[package]]
 name = "stem-bench"
-version = "0.7.0"
+version = "0.8.0"
 dependencies = [
  "hound",
  "opendj-engine",
