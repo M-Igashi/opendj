@@ -4,8 +4,8 @@
 use std::sync::Arc;
 
 use opendj_waveform::{
-    steady_grid, wgpu, Extras, Frame, GpuTrack, Mode, Palette, PhraseKind, Style, TempoLabel,
-    WaveformRenderer, WaveformView,
+    steady_grid, wgpu, Extras, Frame, GpuTrack, Mode, Palette, PhraseKind, StemMix, Style,
+    TempoLabel, WaveformRenderer, WaveformView,
 };
 
 /// Builds the coarser levels the way the analyser does (peaks by maximum;
@@ -1037,6 +1037,110 @@ fn draws_each_stem_in_its_color() {
     let px = draw(&without);
     let i = ((h / 2 * w + w / 2) * 4) as usize;
     assert!(px[i..i + 3].iter().any(|&c| c > 60), "drawn without stems");
+}
+
+/// The Stems look follows the mixer: a muted stem leaves only a faint
+/// outline, a stem turned down is drawn smaller, and the one touched last
+/// is drawn in front.
+#[test]
+fn stems_follow_the_mixer() {
+    let Some((device, queue)) = gpu() else {
+        eprintln!("no GPU adapter; skipping");
+        return;
+    };
+    let renderer = WaveformRenderer::new(&device, &queue);
+    let base: Vec<[u8; 8]> = (0..10_000)
+        .map(|_| [200, 120, 60, 220, 160, 100, 50, 180])
+        .collect();
+    // Bass and vocals together, the bass a little louder.
+    let stems: Vec<[u8; 5]> = (0..100).map(|_| [0, 240, 0, 220, 0]).collect();
+    let colors = [0x2E4E75, 0xD01010, 0xA26018, 0x10D010];
+    let (w, h) = (128u32, 80u32);
+    let frame = Frame {
+        play_seconds: 0.0,
+        visible_seconds: 8.0,
+        duration: 10.0,
+        first_bar_beat: 0.0,
+        grid: steady_grid(0.0, 0.0),
+        cue: None,
+        loop_range: None,
+        loop_marking: None,
+        hotcues: [None; 8],
+        slip: None,
+        gain: 1.0,
+        tempos: Vec::new(),
+        phrases: Vec::new(),
+    };
+    let track = Arc::new(GpuTrack::with_extras(
+        &device,
+        &queue,
+        &renderer,
+        1,
+        &levels(base),
+        1000.0,
+        Extras {
+            stems: &stems,
+            stem_rate: 10.0,
+            stem_colors: &colors,
+            ..Extras::default()
+        },
+    ));
+    let draw = |mix: StemMix| {
+        let mut view = WaveformView::new(&device, Mode::Overview, w, h);
+        view.set_style(Style::Stems);
+        view.set_stem_mix(mix);
+        view.set_track(&device, &renderer, Some(&track));
+        view.render(&device, &queue, &renderer, Some(&frame), 1.0);
+        read_back(&device, &queue, &view)
+    };
+    // Rows from the centre up that a colour fills (red: bass, green: vocal).
+    let reach = |px: &[u8], red: bool| {
+        (0..h / 2)
+            .take_while(|&up| {
+                let i = (((h / 2 - up) * w + w / 2) * 4) as usize;
+                let (r, g) = (px[i] as i32, px[i + 1] as i32);
+                if red {
+                    r > g + 60
+                } else {
+                    g > r + 60
+                }
+            })
+            .count()
+    };
+    let centre = |px: &[u8]| {
+        let i = ((h / 2 * w + w / 2) * 4) as usize;
+        (px[i] as i32, px[i + 1] as i32)
+    };
+    // As analysed: the louder bass at the back, vocals in front.
+    let plain = draw(StemMix::default());
+    let (r, g) = centre(&plain);
+    assert!(g > r + 60, "vocal in front: r {r} g {g}");
+    // Vocal muted: the bass shows through at the centre.
+    let mut muted = StemMix::default();
+    muted.gain[3] = 0.0;
+    muted.rank[3] = 1;
+    let px = draw(muted);
+    let (r, g) = centre(&px);
+    assert!(
+        r > g + 60,
+        "bass at the centre with the vocal muted: r {r} g {g}"
+    );
+    // Bass touched last comes to the front, over the vocal.
+    let mut front = StemMix::default();
+    front.rank[1] = 1;
+    let px = draw(front);
+    let (r, g) = centre(&px);
+    assert!(r > g + 60, "bass in front: r {r} g {g}");
+    // Bass at half level reaches less far than at full level.
+    let full = reach(&px, true);
+    let mut half = front;
+    half.gain[1] = 0.5;
+    let px = draw(half);
+    let smaller = reach(&px, true);
+    assert!(
+        smaller + 3 < full,
+        "half level smaller: {smaller} vs {full}"
+    );
 }
 
 /// 3-Band layers as rekordbox does: equal bands draw the lows widest, the

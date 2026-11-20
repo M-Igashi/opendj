@@ -304,6 +304,10 @@ struct Params {
     tempo_at: [[f32; 4]; MAX_TEMPOS / 4],
     tempo_value: [[u32; 4]; MAX_TEMPOS / 4],
     tempo_count: [u32; 4],
+    /// Each stem's level on the mixer (0 when muted, 1 as analysed) and its
+    /// draw order (higher in front); see [`StemMix`].
+    stem_gain: [[f32; 4]; 2],
+    stem_rank: [[f32; 4]; 2],
 }
 
 /// The colours [`MarkKind::Level`]'s `color` 1 to 8 picks, as sRGB hex.
@@ -771,6 +775,27 @@ fn write_bins(queue: &wgpu::Queue, texture: &wgpu::Texture, data: &[[u8; 4]]) {
     );
 }
 
+/// How the Stems look draws each stem: its level on the mixer and which is
+/// in front. A stem turned down shrinks, and keeps a faint outline at its
+/// full size, so it shows where it would come back.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct StemMix {
+    /// Each stem's level: 1 as analysed, 0 when muted (up to 2 for a boost).
+    pub gain: [f32; MAX_STEMS],
+    /// Draw order: a higher rank is drawn in front, so the stem last
+    /// touched shows on top. Equal ranks put the tallest at the back.
+    pub rank: [u32; MAX_STEMS],
+}
+
+impl Default for StemMix {
+    fn default() -> Self {
+        Self {
+            gain: [1.0; MAX_STEMS],
+            rank: [0; MAX_STEMS],
+        }
+    }
+}
+
 /// One on-screen waveform: a texture the UI shows, drawn from a [`GpuTrack`].
 pub struct WaveformView {
     mode: Mode,
@@ -784,6 +809,8 @@ pub struct WaveformView {
     show_vocals: bool,
     /// The next mix, as fractions of the track (Mono style).
     mix: Option<(f32, f32)>,
+    /// The stems' levels on the mixer (see [`WaveformView::set_stem_mix`]).
+    stem_mix: StemMix,
     texture: wgpu::Texture,
     size: (u32, u32),
     params: wgpu::Buffer,
@@ -823,6 +850,7 @@ impl WaveformView {
             needle: 0.5,
             show_vocals: false,
             mix: None,
+            stem_mix: StemMix::default(),
             texture: create_texture(device, width, height),
             size: (width.max(1), height.max(1)),
             params,
@@ -876,6 +904,11 @@ impl WaveformView {
     /// has. Not on overviews, nor in the Mono style.
     pub fn set_show_vocals(&mut self, show: bool) {
         self.show_vocals = show;
+    }
+
+    /// The stems' levels on the mixer, which the Stems look follows.
+    pub fn set_stem_mix(&mut self, mix: StemMix) {
+        self.stem_mix = mix;
     }
 
     /// The stretch where the next mix happens, as fractions of the track
@@ -1034,10 +1067,16 @@ impl WaveformView {
             tempo_at: [[0.0; 4]; MAX_TEMPOS / 4],
             tempo_value: [[0; 4]; MAX_TEMPOS / 4],
             tempo_count: [0; 4],
+            stem_gain: [[1.0; 4]; 2],
+            stem_rank: [[0.0; 4]; 2],
         };
         if let (Some(t), Style::Stems) = (track, self.style) {
             params.stems = t.stems;
             params.stem_colors = t.stem_colors;
+            for s in 0..MAX_STEMS {
+                params.stem_gain[s / 4][s % 4] = self.stem_mix.gain[s].max(0.0);
+                params.stem_rank[s / 4][s % 4] = self.stem_mix.rank[s] as f32;
+            }
         }
         if let (Some(t), true) = (track, self.show_vocals) {
             if t.vocal[1] > 0.0 && t.vocal[2] > 0.0 {

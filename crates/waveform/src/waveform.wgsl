@@ -64,6 +64,8 @@ struct Params {
     tempo_at: array<vec4<f32>, 4>,     // each tempo label on its own, in slices
     tempo_value: array<vec4<u32>, 4>,  // its BPM in tenths; top bit: show the tenth
     tempo_count: vec4<u32>,            // x: how many
+    stem_gain: array<vec4<f32>, 2>,    // each stem's level on the mixer, 0 when muted (1 = as analysed)
+    stem_rank: array<vec4<f32>, 2>,    // each stem's draw order: higher in front (the last one touched)
 };
 
 @group(0) @binding(0) var<uniform> p: Params;
@@ -243,28 +245,53 @@ fn stems_range(a: f32, b: f32) -> array<f32, 5> {
     return most;
 }
 
-// The Stems look: each stem's shape in its colour, the tallest at the
-// back so every stem shows where it is louder than the ones in front.
+fn stem_gain(s: u32) -> f32 {
+    return p.stem_gain[s / 4u][s % 4u];
+}
+
+fn stem_rank(s: u32) -> f32 {
+    return p.stem_rank[s / 4u][s % 4u];
+}
+
+// The Stems look: each stem's shape in its colour. They follow the mixer:
+// each stem's shape is sized by its level, and one turned down or muted
+// leaves a faint outline at its full size, so it shows where it would come
+// back. The stem last touched is drawn in front; the others the tallest at
+// the back, so every stem shows where it is louder than the ones in front.
 fn stems_wave(base: vec3<f32>, levels: array<f32, 5>, d: f32, span: f32) -> vec3<f32> {
     var color = base;
     let h = levels;
     let n = min(u32(p.stems.w), 5u);
+    // Ghosts first, behind every shape: where a stem turned down would reach.
+    for (var s = 0u; s < n; s = s + 1u) {
+        if (stem_gain(s) > 0.995) { continue; }
+        let reach = height(h[s]) * span;
+        if (reach < 1.0) { continue; }
+        let c = mix(p.stem_colors[s].rgb, vec3<f32>(1.0), 0.35);
+        color = over(color, c, fill(reach, d) * 0.14);
+        // A thin rim along its edge.
+        color = over(color, c, clamp(1.0 - abs(d - reach + 0.5), 0.0, 1.0) * 0.45);
+    }
     var done = array<bool, 5>(false, false, false, false, false);
     for (var round = 0u; round < n; round = round + 1u) {
+        // Back to front: the lowest rank first, and within a rank the tallest.
         var pick = 0u;
+        var best_rank = 1e9;
         var best = -1.0;
         for (var s = 0u; s < n; s = s + 1u) {
-            if (!done[s] && h[s] > best) {
+            if (done[s]) { continue; }
+            let r = stem_rank(s);
+            if (r < best_rank || (r == best_rank && h[s] > best)) {
+                best_rank = r;
                 best = h[s];
                 pick = s;
             }
         }
         done[pick] = true;
-        // The rest are quieter still: under a pixel, they'd only smear the
-        // centre line.
-        let reach = height(best) * span;
+        // Under a pixel, a stem would only smear the centre line.
+        let reach = height(min(h[pick] * stem_gain(pick), 1.0)) * span;
         if (reach < 1.0) {
-            break;
+            continue;
         }
         // Pad colours are dark; lift them a little to read on the background.
         let c = mix(p.stem_colors[pick].rgb, vec3<f32>(1.0), 0.18);

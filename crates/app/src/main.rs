@@ -107,6 +107,7 @@ mod soundcloud;
 mod sources;
 mod spotify;
 mod stem_levels;
+mod stem_mix;
 mod step_lanes;
 mod storage;
 mod stores;
@@ -1414,6 +1415,7 @@ fn run(graphics: Rc<graphics::Choice>) -> Result<(), Box<dyn std::error::Error>>
                         macros: Default::default(),
                         knobs_moved: Default::default(),
                         live_tracks: Default::default(),
+                        stem_mix: Default::default(),
                         moving: false,
                         images_set: false,
                         look: 0,
@@ -2362,6 +2364,9 @@ struct DeckHandles {
     beatloop_size: ControlHandle,
     /// The gain knob, which sizes the waveforms when Size follows gain is on.
     pregain: ControlHandle,
+    /// Each stem's level and mute, which the Stems look follows.
+    stem_volume: [ControlHandle; opendj_waveform::MAX_STEMS],
+    stem_mute: [ControlHandle; opendj_waveform::MAX_STEMS],
     keylock: ControlHandle,
     /// Grid edit mode (the pencil) and the grid lock: an unlocked grid in
     /// edit mode is drawn louder.
@@ -2424,6 +2429,14 @@ impl Decks {
                 slip_position: c("slip_position"),
                 beatloop_size: c("beatloop_size"),
                 pregain: c("pregain"),
+                stem_volume: std::array::from_fn(|s| {
+                    reg.get(&opendj_engine::stem_group(d, s), "volume")
+                        .expect("stem volume control")
+                }),
+                stem_mute: std::array::from_fn(|s| {
+                    reg.get(&opendj_engine::stem_group(d, s), "mute")
+                        .expect("stem mute control")
+                }),
                 keylock: c("keylock"),
                 beats_edit: c("beats_edit"),
                 bpmlock: c("bpmlock"),
@@ -2786,6 +2799,8 @@ struct Gpu {
     /// Which of the knobs drew a line last, as the list beside them shows.
     knobs_moved: [bool; macro_lanes::KNOBS],
     live_tracks: [Option<Arc<GpuTrack>>; NUM_DECKS],
+    /// Each deck's stems on the mixer, for the Stems look.
+    stem_mix: stem_mix::StemMixes<NUM_DECKS>,
     /// Whether a deck was moving in the last frame drawn.
     moving: bool,
     images_set: bool,
@@ -3172,6 +3187,16 @@ impl Gpu {
                 (None, _) => None,
             };
             self.samples[d] = samples.clone();
+            // The Stems look follows each stem's level and mute.
+            let (stem_mix, stems_moved) = self.stem_mix.update(
+                d,
+                track.map(|t| t.id),
+                std::array::from_fn(|s| h.stem_volume[s].get() as f32),
+                std::array::from_fn(|s| h.stem_mute[s].get_bool()),
+            );
+            self.moving |= stems_moved && stems_look;
+            self.scrolling[d].set_stem_mix(stem_mix);
+            self.overview[d].set_stem_mix(stem_mix);
             self.scrolling[d].set_samples(samples.map(|s| s as Arc<dyn opendj_waveform::Samples>));
             for (view, frame) in [
                 (&mut self.scrolling[d], scrolling_frame.as_ref()),
