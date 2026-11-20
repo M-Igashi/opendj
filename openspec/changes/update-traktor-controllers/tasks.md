@@ -13,6 +13,7 @@
 - [x] 3.1 S2 MK3, S3, S4 MK3 and MX2 drawn from the manuals; MX2 on the supported list as Beta; guides updated
 
 ## 4. New controllers
-- [ ] 4.1 X1 MK3 and Z1 MK2 HID mappings, pictures and guides
-- [ ] 4.2 D2, S5 and S8 HID mappings, pictures and guides (screens stay dark)
-- [ ] 4.3 Testers try them on the hardware
+- [x] 4.1 X1 MK3 and Z1 MK2 HID mappings, pictures and guides
+- [x] 4.2 D2 HID mapping, picture and guide (screen stays dark)
+- [ ] 4.3 S5 and S8 HID mappings, pictures and guides (their published report layouts are incomplete: no browse or loop encoders)
+- [ ] 4.4 Testers try them on the hardware

@@ -433,3 +433,180 @@ fn ddj_flx10_jog_screens_show_the_waveform() {
     assert_eq!(screens.errors(), Vec::<String>::new());
     opendj_controllers::waves::set_source(None);
 }
+
+/// openDJ's X1 MK3 mapping: transport and hot cues per side, the loop
+/// encoder, MODE switching the top knobs from effects to the mixer, and the
+/// lights going out as report 0x80.
+#[test]
+fn traktor_kontrol_x1_mk3_plays_as_traktor() {
+    let (reg, mut c, _device) = load("Traktor Kontrol X1 MK3.hid.xml");
+    settle(&mut c, 50);
+    let mut idle = vec![0u8; 25];
+    idle[0] = 0x01;
+    c.receive_report(&idle);
+    c.receive_report(&idle);
+    // PLAY on the right deck.
+    tap(&mut c, &idle, 4, 0x10);
+    assert_eq!(get(&reg, "[Channel2]", "play"), 1.0, "right PLAY");
+    // SHIFT + REV turns flux on; REV held is a reverse roll.
+    let mut shifted = idle.clone();
+    shifted[1] |= 0x01;
+    c.receive_report(&shifted);
+    tap(&mut c, &shifted, 4, 0x04);
+    c.receive_report(&idle);
+    settle(&mut c, 10);
+    assert_eq!(get(&reg, "[Channel1]", "slip_enabled"), 1.0, "SHIFT + REV");
+    // SHIFT + loop encoder one step up jumps a loop's length.
+    let size = get(&reg, "[Channel1]", "beatloop_size");
+    let mut turned = shifted.clone();
+    turned[7] = 0x01;
+    c.receive_report(&shifted);
+    c.receive_report(&turned);
+    settle(&mut c, 10);
+    assert_eq!(
+        get(&reg, "[Channel1]", "beatjump"),
+        size,
+        "SHIFT + loop encoder"
+    );
+    turned[1] &= !0x01;
+    c.receive_report(&turned);
+    idle = turned;
+    // MODE twice: mixer; the fourth left knob is deck 1's volume.
+    tap(&mut c, &idle, 1, 0x02);
+    tap(&mut c, &idle, 1, 0x02);
+    // Soft takeover: the knob picks the volume up near where it is.
+    reg.get("[Channel1]", "volume").unwrap().set(0.49);
+    let mut knob = idle.clone();
+    knob[15] = 0x00;
+    knob[16] = 0x08;
+    c.receive_report(&knob);
+    settle(&mut c, 10);
+    let volume = get(&reg, "[Channel1]", "volume");
+    assert!((volume - 0.5).abs() < 0.01, "mixer volume {volume}");
+    let reports = c.take_reports();
+    assert!(
+        reports
+            .iter()
+            .any(|r| r.first() == Some(&0x80) && r.len() == 49),
+        "LED report"
+    );
+    assert_eq!(c.errors(), Vec::<String>::new());
+}
+
+/// openDJ's Z1 MK2 mapping: headphone cue, Mixer FX shortcuts and STEMS
+/// mode turning the gain knob into stem 1's volume.
+#[test]
+fn traktor_kontrol_z1_mk2_plays_as_traktor() {
+    let (reg, mut c, _device) = load("Traktor Kontrol Z1 MK2.hid.xml");
+    settle(&mut c, 50);
+    let mut idle = vec![0u8; 35];
+    idle[0] = 0x01;
+    c.receive_report(&idle);
+    c.receive_report(&idle);
+    tap(&mut c, &idle, 2, 0x10);
+    assert_eq!(get(&reg, "[Channel1]", "pfl"), 1.0, "left CUE");
+    tap(&mut c, &idle, 1, 0x80);
+    assert_eq!(
+        get(&reg, "[QuickEffectRack1_[Channel2]]", "loaded_chain_preset"),
+        2.0,
+        "FX 1"
+    );
+    // STEMS on the left with a stem track: GAIN is stem 1's volume.
+    reg.get("[Channel1]", "stem_count").unwrap().set(4.0);
+    reg.get("[Channel1_Stem1]", "volume").unwrap().set(0.49);
+    tap(&mut c, &idle, 1, 0x02);
+    let mut knob = idle.clone();
+    knob[3] = 0xFF;
+    knob[4] = 0x07;
+    c.receive_report(&knob);
+    settle(&mut c, 10);
+    assert_eq!(
+        get(&reg, "[Channel1_Stem1]", "volume"),
+        0.5,
+        "GAIN in STEMS mode"
+    );
+    let reports = c.take_reports();
+    assert!(
+        reports
+            .iter()
+            .any(|r| r.first() == Some(&0x80) && r.len() == 47),
+        "LED report"
+    );
+    assert_eq!(c.errors(), Vec::<String>::new());
+}
+
+/// The D2 as Traktor plays it: DECK switches A and C, DECK held with B picks
+/// deck B, A-D send decks to the effect unit on top, the faders are stem
+/// volumes and the LOOP pads jump by the loop.
+#[test]
+fn traktor_kontrol_d2_plays_as_traktor() {
+    let (reg, mut c, _device) = load("Traktor Kontrol D2.hid.xml");
+    settle(&mut c, 50);
+    let mut idle = vec![0u8; 17];
+    idle[0] = 0x01;
+    let mut knobs = vec![0u8; 25];
+    knobs[0] = 0x02;
+    c.receive_report(&idle);
+    c.receive_report(&knobs);
+    tap(&mut c, &idle, 8, 0x10);
+    assert_eq!(get(&reg, "[Channel1]", "play"), 1.0, "PLAY on deck A");
+    tap(&mut c, &idle, 7, 0x04);
+    tap(&mut c, &idle, 8, 0x10);
+    assert_eq!(
+        get(&reg, "[Channel3]", "play"),
+        1.0,
+        "DECK, then PLAY on deck C"
+    );
+    // Hold DECK and press B.
+    let mut held = idle.clone();
+    held[7] |= 0x04;
+    c.receive_report(&held);
+    tap(&mut c, &held, 5, 0x02);
+    c.receive_report(&idle);
+    tap(&mut c, &idle, 8, 0x10);
+    assert_eq!(
+        get(&reg, "[Channel2]", "play"),
+        1.0,
+        "DECK + B, then PLAY on deck B"
+    );
+    tap(&mut c, &idle, 5, 0x01);
+    assert_eq!(
+        get(&reg, "[EffectRack1_EffectUnit2]", "group_[Channel1]_enable"),
+        1.0,
+        "A sends deck A to the B/D effect unit"
+    );
+    reg.get("[Channel2]", "stem_count").unwrap().set(4.0);
+    reg.get("[Channel2_Stem2]", "volume").unwrap().set(0.49);
+    let mut fader = knobs.clone();
+    fader[11] = 0xF7;
+    fader[12] = 0x07;
+    c.receive_report(&fader);
+    settle(&mut c, 10);
+    assert_eq!(
+        get(&reg, "[Channel2_Stem2]", "volume"),
+        0.5,
+        "fader 2 is stem 2"
+    );
+    tap(&mut c, &idle, 4, 0x08);
+    assert_eq!(
+        get(&reg, "[QuickEffectRack1_[Channel2_Stem2]]", "enabled"),
+        1.0,
+        "ON 2 sends stem 2 to the stem effect"
+    );
+    tap(&mut c, &idle, 8, 0x04);
+    let size = get(&reg, "[Channel2]", "beatloop_size");
+    tap(&mut c, &idle, 7, 0x02);
+    assert_eq!(
+        get(&reg, "[Channel2]", "beatjump"),
+        size,
+        "LOOP pad 8 jumps by the loop"
+    );
+    let reports = c.take_reports();
+    assert!(
+        reports
+            .iter()
+            .any(|r| r.first() == Some(&0x80) && r.len() == 123),
+        "LED report"
+    );
+    assert_eq!(c.errors(), Vec::<String>::new());
+}
