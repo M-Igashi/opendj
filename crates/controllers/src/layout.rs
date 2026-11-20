@@ -10,7 +10,7 @@ use serde_json::Value;
 
 use crate::probe::message_key;
 
-const LAYOUTS: [&str; 60] = [
+const LAYOUTS: [&str; 66] = [
     include_str!("../layouts/flx4.json"),
     include_str!("../layouts/ddj-flx6.json"),
     include_str!("../layouts/ddj-flx10.json"),
@@ -49,6 +49,12 @@ const LAYOUTS: [&str; 60] = [
     include_str!("../layouts/xone-k2.json"),
     include_str!("../layouts/twister.json"),
     include_str!("../layouts/numark-v7.json"),
+    include_str!("../layouts/numark-ns4fx.json"),
+    include_str!("../layouts/numark-dj2go2-touch.json"),
+    include_str!("../layouts/numark-mixstream-pro.json"),
+    include_str!("../layouts/numark-party-mix.json"),
+    include_str!("../layouts/numark-party-mix-mkii.json"),
+    include_str!("../layouts/numark-scratch.json"),
     include_str!("../layouts/ddj-flx2.json"),
     include_str!("../layouts/ddj-rev5.json"),
     include_str!("../layouts/ddj-sr.json"),
