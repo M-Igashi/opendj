@@ -9,6 +9,10 @@
 //! tracks on decks over a wait-free queue as soon as their files are open,
 //! then decode and analyse them while they play.
 
+// Checking that HTDemucs on the GPU (burn over wgpu) can be kept in a static
+// (`separation::GPU_MODEL`) goes deeper than the default 128.
+#![recursion_limit = "256"]
+
 pub mod analysis;
 pub mod arp;
 mod auto_trim;
@@ -65,6 +69,7 @@ pub mod set_checks;
 pub mod set_fixes;
 pub mod set_render;
 pub mod set_timeline;
+pub mod stem_file;
 pub mod stems;
 pub mod synth;
 pub mod tags;
@@ -371,6 +376,17 @@ impl AudioEngine {
             Some(p) => p.load_instrument_preset(key, reference),
             None => Err("this build hosts no plugins".into()),
         }
+    }
+
+    /// The playing instrument's display file for the deck (see
+    /// `opendj_plugin_host::display`); none while no instrument plays.
+    pub fn instrument_display(&self) -> Option<std::path::PathBuf> {
+        self.plugins.as_ref()?.instrument_display()
+    }
+
+    /// Effect slot `slot` of unit `unit`'s display file and plugin name.
+    pub fn slot_display(&self, unit: usize, slot: usize) -> Option<(std::path::PathBuf, String)> {
+        self.plugins.as_ref()?.slot_display(unit, slot)
     }
 
     /// The playing instrument's parameter names, for its knobs
@@ -795,7 +811,34 @@ impl AudioEngine {
         }
         let loaded = self.loaded.clone();
         let file = path.clone();
-        stems::separate(path, move |result| {
+        let live = {
+            let (loaded, registry, file) =
+                (self.loaded.clone(), self.registry.clone(), path.clone());
+            // The decks with the track, a playing one first, and where
+            // each plays.
+            move || {
+                let decks = loaded.read().unwrap();
+                let mut live: Vec<(bool, Arc<Audio>, usize)> = decks
+                    .iter()
+                    .enumerate()
+                    .filter_map(|(d, t)| {
+                        let t = t.as_ref()?;
+                        if !matches!(&t.source, Source::File(p) if *p == file) {
+                            return None;
+                        }
+                        let audio = t.audio.clone()?;
+                        let group = controls::deck_group(d);
+                        let get = |key: &str| registry.get(&group, key).map_or(0.0, |c| c.get());
+                        let at =
+                            (get("playposition").clamp(0.0, 1.0) * audio.len() as f64) as usize;
+                        Some((get("play") > 0.0, audio, at))
+                    })
+                    .collect();
+                live.sort_by_key(|(playing, _, _)| !playing);
+                live.into_iter().map(|(_, a, at)| (a, at)).collect()
+            }
+        };
+        stems::separate(path, live, move |result| {
             let source = match result {
                 Ok(s) => s,
                 Err(e) => {

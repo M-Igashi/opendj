@@ -32,6 +32,8 @@ import { NowPlayingUi } from "nowplaying.slint";
 import { DeckStrip, FourDeckBar } from "fourdeck.slint";
 import { LiteDeck, LiteMixer, LiteUi, PadBarHalf } from "lite.slint";
 import { FxBar } from "fxbar.slint";
+import { FxDisplay, FxDisplayPanel } from "plugin_display.slint";
+export { FxDisplay }
 import { RemixUi } from "remix.slint";
 import { InstrumentsUi, LiveItem, ParamMatch, PresetItem, PresetUi } from "instruments.slint";
 import { Browser, BrowserPanels, Folder, TrackRow, SideRow, SideTab, SideTabs, RailOrder, DragGrip, TrackDrag, LibraryEdit, MoveTarget, SidelistUi, Choice, KeepGoingUi, UpNextUi, MenuListRow, MenuTag, StoreUi, StreamMatch, CatalogSearch, CatalogRow, WantedUi, FilesUi, AlbumsUi, AlbumTile, ColumnUi, ListColumn, ListText, HealthUi, HealthCard, HealthStage, HealthLine, HealthArea, HealthHold, HealthStep, HealthChip, HealthReview, CleanupUi, CleanupRow, FixNamesUi, GenreRow, TagGroupCard, ListIssueRow, ListsUi, BuyUi, BuyGroup, BuyRow } from "library.slint";
@@ -2136,14 +2138,14 @@ export component AppWindow inherits Window {
                 }
                 // The logo and name, centred on the window whatever the pills'
                 // widths; in Player, the search box takes their place.
-                if !player: HorizontalLayout {
-                    alignment: center;
-                    spacing: 8px;
-                    VerticalLayout {
-                        alignment: center;
-                        Image { source: @image-url("icons/opendj-mark.svg"); width: 32px; height: 20px; }
-                    }
-                    Text { text: "openDJ"; color: Theme.text; font-family: Theme.brand-font; font-size: 21px; vertical-alignment: center; }
+                // The full logo (mark and wordmark); Light gets the
+                // darker inks.
+                if !player: Image {
+                    source: Theme.light ? @image-url("icons/opendj-logo-light.svg") : @image-url("icons/opendj-logo.svg");
+                    height: 24px;
+                    width: self.height * 1664 / 296;
+                    x: (parent.width - self.width) / 2;
+                    y: (parent.height - self.height) / 2;
                 }
                 HorizontalLayout {
                     padding-left: 4px + traffic-light-inset;
@@ -2583,6 +2585,11 @@ export component AppWindow inherits Window {
                     dismiss-touch := TouchArea { clicked => { update-dismiss(); } }
                 }
             }
+        }
+
+        if FxDisplay.shown != "": FxDisplayPanel {
+            window-width: root.width;
+            window-height: root.height;
         }
 
         if alert != "": Rectangle {

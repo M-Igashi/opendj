@@ -88,6 +88,7 @@ mod now_playing;
 mod now_playing_view;
 mod osc;
 mod osc_events;
+mod plugin_display;
 mod prefs;
 mod prep_click;
 mod presets;
@@ -1230,6 +1231,8 @@ fn run(graphics: Rc<graphics::Choice>) -> Result<(), Box<dyn std::error::Error>>
             },
         );
     }
+    // The instrument's own display on its deck (a Pd patch's Lua displays).
+    let _display_timer = plugin_display::install(&app, engine.clone());
     // Automatic backups: at start, then checked every hour.
     backup::run_if_due();
     let backup_timer = slint::Timer::default();
@@ -1486,6 +1489,14 @@ fn run(graphics: Rc<graphics::Choice>) -> Result<(), Box<dyn std::error::Error>>
 
     // A newer release: checked once per start, offered while nothing plays.
     update::install_model_fetch();
+    // High-quality stems' GPU kernels, compiled once the app has settled,
+    // so the first track prepared starts playing them seconds sooner.
+    let _ = std::thread::Builder::new()
+        .name("stems-warm-up".into())
+        .spawn(|| {
+            std::thread::sleep(std::time::Duration::from_secs(20));
+            opendj_engine::stems::warm_up_when_idle();
+        });
     let update_check = update::check();
     let update: Rc<RefCell<Option<update::Release>>> = Default::default();
     let installing: Rc<RefCell<Option<std::sync::mpsc::Receiver<update::Progress>>>> =
@@ -1754,6 +1765,7 @@ fn run(graphics: Rc<graphics::Choice>) -> Result<(), Box<dyn std::error::Error>>
                 browser.borrow_mut().poll_tasks();
                 browser.borrow_mut().poll_usb_export();
                 browser.borrow_mut().poll_playlist_files();
+                browser.borrow_mut().poll_stem_files();
                 browser.borrow_mut().poll_inbox_albums();
                 browser.borrow_mut().poll_rekordbox_xml();
                 browser.borrow_mut().poll_covers();
