@@ -1,0 +1,320 @@
+// openDJ Studio: a Session grid of clips.
+
+export global Theme {
+    out property <color> bg: #101112;
+    out property <color> panel: #161819;
+    out property <color> slot: #1e2022;
+    out property <color> slot-hover: #26292b;
+    out property <color> line: #2a2d30;
+    out property <color> text: #e8e8ea;
+    out property <color> dim: #8b8d91;
+    out property <color> accent: #B69CFF;
+    out property <color> accent-dark: #8C72D9;
+    out property <color> playing: #7ee08a;
+    out property <color> queued: #ffd166;
+    out property <length> radius: 4px;
+}
+
+// Slot states, as the audio thread reports them.
+export enum SlotState { empty, stopped, queued, playing, stopping }
+
+export struct SlotData {
+    name: string,
+    color: color,
+    state: SlotState,
+}
+
+export struct TrackData {
+    name: string,
+    color: color,
+    // How far through its clip the track is, 0..1; -1 when stopped.
+    progress: float,
+    // A stop is waiting for the next launch point.
+    stopping: bool,
+}
+
+component Pill inherits Rectangle {
+    in property <string> label;
+    in property <bool> on;
+    in property <bool> enabled: true;
+    callback clicked;
+    height: 28px;
+    min-width: 56px;
+    border-radius: 14px;
+    background: on ? Theme.accent : (ta.has-hover ? Theme.slot-hover : Theme.slot);
+    border-width: 1px;
+    border-color: on ? Theme.accent : Theme.line;
+    opacity: enabled ? 1 : 0.4;
+    HorizontalLayout {
+        padding-left: 12px;
+        padding-right: 12px;
+        Text {
+            text: label;
+            color: on ? #101112 : Theme.text;
+            font-size: 12px;
+            font-weight: 600;
+            vertical-alignment: center;
+            horizontal-alignment: center;
+        }
+    }
+    ta := TouchArea {
+        enabled: root.enabled;
+        clicked => { root.clicked(); }
+    }
+}
+
+component Readout inherits Rectangle {
+    in property <string> title;
+    in property <string> value;
+    in property <length> value-width: 64px;
+    HorizontalLayout {
+        spacing: 6px;
+        Text {
+            text: title;
+            color: Theme.dim;
+            font-size: 11px;
+            vertical-alignment: center;
+        }
+        Text {
+            text: value;
+            color: Theme.text;
+            font-size: 15px;
+            font-weight: 600;
+            min-width: value-width;
+            vertical-alignment: center;
+        }
+    }
+}
+
+component ClipSlot inherits Rectangle {
+    in property <SlotData> data;
+    in property <bool> blink;
+    in property <float> progress: -1;
+    callback launch;
+    border-radius: Theme.radius;
+    background: data.state == SlotState.empty
+        ? (ta.has-hover ? Theme.slot-hover : Theme.slot)
+        : (data.state == SlotState.playing ? data.color : data.color.with-alpha(ta.has-hover ? 0.55 : 0.4));
+    border-width: data.state == SlotState.queued ? 2px : 0px;
+    border-color: blink ? Theme.queued : Theme.queued.with-alpha(0.25);
+    clip: true;
+    if data.state == SlotState.playing && progress >= 0: Rectangle {
+        x: 0;
+        y: parent.height - 3px;
+        height: 3px;
+        width: parent.width * progress;
+        background: #ffffffcc;
+    }
+    HorizontalLayout {
+        padding-left: 8px;
+        padding-right: 8px;
+        spacing: 6px;
+        Text {
+            // Play triangle on a clip, a small square on an empty slot.
+            text: data.state == SlotState.empty ? "▫" : (data.state == SlotState.playing ? "▶" : "▷");
+            color: data.state == SlotState.playing ? #101112 : (data.state == SlotState.empty ? Theme.dim : Theme.text);
+            font-size: 12px;
+            vertical-alignment: center;
+            width: 12px;
+        }
+        Text {
+            text: data.name;
+            color: data.state == SlotState.playing ? #101112 : Theme.text;
+            font-size: 12px;
+            font-weight: data.state == SlotState.playing ? 700 : 500;
+            vertical-alignment: center;
+            overflow: elide;
+        }
+    }
+    ta := TouchArea {
+        clicked => { root.launch(); }
+    }
+}
+
+export component AppWindow inherits Window {
+    title: "openDJ Studio";
+    preferred-width: 1180px;
+    preferred-height: 720px;
+    min-width: 900px;
+    min-height: 560px;
+    background: Theme.bg;
+    default-font-size: 13px;
+
+    in property <[TrackData]> tracks;
+    // Scene-major: slot (scene s, track t) is at s * tracks.length + t.
+    in property <[SlotData]> slots;
+    in property <int> scenes: 8;
+    in property <bool> playing;
+    in property <string> tempo: "124.0";
+    in property <string> position: "1.1";
+    in property <bool> link;
+    in property <int> peers;
+    in property <string> quantize: "1 Bar";
+    in property <string> load: "0%";
+    in property <string> status;
+    in property <bool> blink;
+
+    callback launch-clip(int, int);   // track, scene
+    callback launch-scene(int);
+    callback stop-track(int);
+    callback stop-all();
+    callback toggle-play();
+    callback tempo-step(float);
+    callback toggle-link();
+    callback next-quantize();
+
+    property <length> scene-width: 76px;
+    property <length> gap: 4px;
+
+    VerticalLayout {
+        // Top bar.
+        Rectangle {
+            height: 52px;
+            background: Theme.panel;
+            HorizontalLayout {
+                padding-left: 16px;
+                padding-right: 16px;
+                spacing: 14px;
+                alignment: start;
+                Text {
+                    text: "openDJ Studio";
+                    color: Theme.accent;
+                    font-size: 16px;
+                    font-weight: 700;
+                    vertical-alignment: center;
+                }
+                Rectangle { width: 8px; }
+                VerticalLayout {
+                    alignment: center;
+                    Pill {
+                        label: root.playing ? "■ Stop" : "▶ Play";
+                        on: root.playing;
+                        clicked => { root.toggle-play(); }
+                    }
+                }
+                VerticalLayout {
+                    alignment: center;
+                    Pill { label: "−"; min-width: 28px; clicked => { root.tempo-step(-1); } }
+                }
+                Readout { title: "BPM"; value: root.tempo; value-width: 52px; }
+                VerticalLayout {
+                    alignment: center;
+                    Pill { label: "+"; min-width: 28px; clicked => { root.tempo-step(1); } }
+                }
+                Readout { title: "BAR"; value: root.position; value-width: 52px; }
+                VerticalLayout {
+                    alignment: center;
+                    Pill {
+                        label: root.link ? "LINK · " + root.peers : "LINK";
+                        on: root.link;
+                        clicked => { root.toggle-link(); }
+                    }
+                }
+                VerticalLayout {
+                    alignment: center;
+                    Pill { label: "Launch: " + root.quantize; clicked => { root.next-quantize(); } }
+                }
+                Readout { title: "CPU"; value: root.load; value-width: 40px; }
+            }
+        }
+        // The grid: track names, a row per scene with its scene button on
+        // the right, then the stop buttons. Columns are placed by hand so
+        // every row lines up, whatever the clip names.
+        grid := Rectangle {
+            vertical-stretch: 1;
+            property <length> pad: 12px;
+            property <length> header-height: 34px;
+            property <length> stop-height: 36px;
+            property <length> column-width: (self.width - 2 * self.pad - root.scene-width - root.gap * root.tracks.length) / max(1, root.tracks.length);
+            property <length> row-height: (self.height - 2 * self.pad - self.header-height - self.stop-height - root.gap * (root.scenes + 1)) / max(1, root.scenes);
+            property <length> scene-x: self.pad + root.tracks.length * (self.column-width + root.gap);
+            for t[i] in root.tracks: Rectangle {
+                x: grid.pad + i * (grid.column-width + root.gap);
+                y: grid.pad;
+                width: grid.column-width;
+                height: grid.header-height;
+                border-radius: Theme.radius;
+                background: Theme.panel;
+                Rectangle {
+                    x: 10px;
+                    width: 4px;
+                    height: 16px;
+                    border-radius: 2px;
+                    background: t.color;
+                }
+                Text {
+                    x: 22px;
+                    text: t.name;
+                    color: Theme.text;
+                    font-weight: 600;
+                }
+            }
+            for s in root.scenes: Rectangle {
+                x: 0;
+                y: grid.pad + grid.header-height + root.gap + s * (grid.row-height + root.gap);
+                width: grid.width;
+                height: grid.row-height;
+                for t[i] in root.tracks: ClipSlot {
+                    x: grid.pad + i * (grid.column-width + root.gap);
+                    width: grid.column-width;
+                    height: grid.row-height;
+                    data: root.slots[s * root.tracks.length + i];
+                    blink: root.blink;
+                    progress: t.progress;
+                    launch => { root.launch-clip(i, s); }
+                }
+                Rectangle {
+                    x: grid.scene-x;
+                    width: root.scene-width;
+                    border-radius: Theme.radius;
+                    background: sa.has-hover ? Theme.slot-hover : Theme.panel;
+                    border-width: 1px;
+                    border-color: Theme.line;
+                    Text {
+                        text: "▶ " + (s + 1);
+                        color: Theme.text;
+                        font-weight: 600;
+                    }
+                    sa := TouchArea { clicked => { root.launch-scene(s); } }
+                }
+            }
+            for t[i] in root.tracks: Rectangle {
+                x: grid.pad + i * (grid.column-width + root.gap);
+                y: grid.height - grid.pad - grid.stop-height;
+                width: grid.column-width;
+                height: grid.stop-height;
+                border-radius: Theme.radius;
+                background: ta.has-hover ? Theme.slot-hover : Theme.panel;
+                border-width: t.stopping ? 2px : 0px;
+                border-color: root.blink ? Theme.queued : Theme.queued.with-alpha(0.25);
+                Text {
+                    text: "■";
+                    color: t.progress >= 0 ? Theme.text : Theme.dim;
+                }
+                ta := TouchArea { clicked => { root.stop-track(i); } }
+            }
+            Rectangle {
+                x: grid.scene-x;
+                y: grid.height - grid.pad - grid.stop-height;
+                width: root.scene-width;
+                height: grid.stop-height;
+                border-radius: Theme.radius;
+                background: stop-all.has-hover ? Theme.slot-hover : Theme.panel;
+                Text { text: "Stop all"; color: Theme.text; font-size: 12px; }
+                stop-all := TouchArea { clicked => { root.stop-all(); } }
+            }
+        }
+        // Status line.
+        Rectangle {
+            height: 26px;
+            background: Theme.panel;
+            Text {
+                x: 16px;
+                text: root.status;
+                color: Theme.dim;
+                font-size: 11px;
+                vertical-alignment: center;
+            }
+        }
+    }
+}

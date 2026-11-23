@@ -8252,6 +8252,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "opendj-studio"
+version = "1.0.0-dev"
+dependencies = [
+ "cpal",
+ "opendj-engine",
+ "rtrb",
+ "rusty_link",
+ "slint",
+ "slint-build",
+]
+
+[[package]]
 name = "opendj-tablet"
 version = "1.0.0-dev"
 dependencies = [
