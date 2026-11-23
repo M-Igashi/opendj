@@ -32,6 +32,7 @@ impl Surface {
                     c.launch(track, scene);
                 }
             }
+            View::Note if self.sequencing(c) => self.sequencer_pad(index, velocity, c),
             View::Note => {
                 if velocity == 0 {
                     if let Some((track, pitch)) = self.held[index].take() {
@@ -105,6 +106,7 @@ impl Surface {
         index: usize,
         c: &Controls,
         stages: Option<&steps::Stages>,
+        notes: Option<&(f64, Vec<crate::clip::Note>)>,
     ) -> Led {
         let (row, col) = (index / 8, index % 8);
         let m = &c.monitor;
@@ -126,6 +128,7 @@ impl Surface {
                     SlotState::Playing => Led::animate(track_color(t), PULSE_QUARTER, WHITE),
                 }
             }
+            View::Note if self.sequencing(c) => self.sequencer_led(index, c, notes),
             View::Note => {
                 let t = c.selected_track();
                 if self.held[index].is_some() {

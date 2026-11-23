@@ -288,7 +288,8 @@ pub fn link() -> i32 {
 
 /// Draws what Push 2's screen shows for the demo set, a clip playing on
 /// each track, into a PNG: with the instrument knobs, with the mixer, in
-/// Scales mode, and in Steps mode holding a stage with a lock.
+/// Scales mode, in Steps mode holding a stage with a lock, and in the drum
+/// sequencer holding a step.
 pub fn push_preview(path: &str) -> i32 {
     use crate::control::{Controls, Mix};
     use crate::push::display::{self, HEIGHT, WIDTH};
@@ -339,6 +340,12 @@ pub fn push_preview(path: &str) -> i32 {
     ] {
         surface.input(&m, &c);
     }
+    frames.push(settle(&mut renderer, &surface));
+    // The drum sequencer, holding the first kick.
+    surface.input(&[0x80, PAD_FIRST + 5, 0], &c);
+    c.select(0, Some(0));
+    surface.input(&[0xB0, NOTE, 127], &c);
+    surface.input(&[0x90, PAD_FIRST + 56, 100], &c);
     frames.push(settle(&mut renderer, &surface));
     let gap = 12;
     let height = HEIGHT * frames.len() + gap * (frames.len() - 1);

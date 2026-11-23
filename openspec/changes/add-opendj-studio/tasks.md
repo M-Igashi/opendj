@@ -27,6 +27,8 @@
 - [x] 2.13 Push views (pads) and modes (encoders, screen buttons) apart; buttons report press, release and hold; held Session, Note or Scale only peek
 - [x] 2.14 Scales mode on Push: 32 scales, root, five pad layouts, in key or chromatic; stage clips follow the key
 - [ ] 2.15 Try Scales mode and peeking on hardware (macOS)
+- [x] 2.16 Drum sequencer on Push (Note view on drum tracks): 32 steps, sound pads, clip pages and length, step length on the scene buttons, long notes, note velocity, length and chance on the encoders while steps are held
+- [ ] 2.17 Try the drum sequencer on hardware (macOS)
 
 ## 3. Clip editing
 

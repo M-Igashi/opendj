@@ -60,3 +60,10 @@ openDJ Studio SHALL keep one key for the set, a scale and a root, that Push's No
 #### Scenario: Playing in another key
 - **WHEN** Scale is pressed, then C and Major are picked and Scale is pressed again
 - **THEN** the Note view's bottom-left pad plays C, its pads light the scale's notes with C in the track's colour, and stage clips play in C major
+
+### Requirement: Drum sequencer on Push 2
+On a drum track, Push 2's Note view SHALL be a step sequencer for the selected slot's note clip: the top four pad rows SHALL show 32 steps of the selected sound, the bottom-left 4x4 pads SHALL play and select sounds, and the bottom-right 4x4 pads SHALL show the clip's pages of 32 steps, selecting one on a tap and setting the clip's length when one is held and another tapped. The scene buttons SHALL set the step length from 1/4 to 1/32 triplets. Tapping a step SHALL add or remove a note; holding a step and tapping a later one SHALL make one note across them; while steps are held the encoders SHALL change their notes' velocity, length and chance. An empty slot SHALL become a one-bar clip when a step is added.
+
+#### Scenario: A long note
+- **WHEN** step 1 is held and step 3 tapped in 1/16 steps
+- **THEN** the clip holds one note of the selected sound from beat 0 lasting three sixteenths

@@ -61,8 +61,16 @@ studio picks it up within two seconds; Ableton Live doesn't need to run.
 If Live is open, set Push's Control Surface to None in Live's preferences,
 or Live takes the lights back.
 
-- Pads: the clip grid (Session) or the selected instrument (Note: drum pads,
-  or a keyboard in the set's key; Octave buttons shift it). Hold Session
+- Pads: the clip grid (Session) or the selected instrument (Note: a
+  keyboard in the set's key; Octave buttons shift it).
+- Note on a drum track is the drum sequencer: the top four rows are 32
+  steps of the selected sound, the bottom-left 4x4 plays and picks sounds,
+  the bottom-right 4x4 shows the clip's pages (tap to see one, hold one and
+  tap another to set the clip's length). Tap a step to add or remove a
+  note; hold a step and tap one to its right for a long note; hold steps
+  and turn the first three encoders for velocity, length and chance. Scene
+  buttons set the step length (1/4 to 1/32t), Delete + sound pad clears
+  that sound, Accent adds at full velocity. Hold Session
   or Note to peek at that view: it goes back when you let go.
 - Steps (press Note again, or Layout): the selected slot as a stage
   clip, one pad column per stage. The scene buttons pick what the pads

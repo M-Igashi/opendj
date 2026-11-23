@@ -6,7 +6,7 @@
 use std::sync::atomic::{AtomicI32, AtomicU32, AtomicU64, AtomicU8, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 
-use crate::clip::{Clip, Sound, Track, MAX_TRACKS, SCENES};
+use crate::clip::{Clip, Note, Sound, Track, MAX_TRACKS, SCENES};
 use crate::engine::{Command, Monitor, Program, Quantize};
 use crate::scale::Key;
 use crate::sound::{self, PARAMS};
@@ -189,6 +189,41 @@ impl Controls {
     /// A clip's name and length in beats.
     pub fn clip_info(&self, track: usize, scene: usize) -> Option<(String, f64)> {
         self.with_clip(track, scene, |c| (c.name.clone(), c.beats))
+    }
+
+    // ----------------------------------------------------------- notes
+
+    /// A note clip's length in beats and notes: an empty one-bar clip for
+    /// an empty slot, None for a stage or audio clip.
+    pub fn notes(&self, track: usize, scene: usize) -> Option<(f64, Vec<Note>)> {
+        let set = self.set.lock().ok()?;
+        match set.get(track)?.slots.get(scene)? {
+            None => Some((4.0, Vec::new())),
+            Some(c) if c.stages.is_none() && c.audio.is_none() => Some((c.beats, c.notes.clone())),
+            Some(_) => None,
+        }
+    }
+
+    /// Changes the note clip in a slot (making a one-bar clip in an empty
+    /// slot) and sends the set to the audio thread. False for a stage or
+    /// audio clip.
+    pub fn edit_notes(&self, track: usize, scene: usize, f: impl FnOnce(&mut Clip)) -> bool {
+        let Ok(mut set) = self.set.lock() else {
+            return false;
+        };
+        let Some(slot) = set.get_mut(track).and_then(|t| t.slots.get_mut(scene)) else {
+            return false;
+        };
+        let clip = slot.get_or_insert_with(|| Clip::new("Clip", 4.0, Vec::new()));
+        if clip.stages.is_some() || clip.audio.is_some() {
+            return false;
+        }
+        f(clip);
+        clip.notes.sort_by(|a, b| a.start.total_cmp(&b.start));
+        self.send(Command::Program(Program::compile(&set)));
+        drop(set);
+        self.bump();
+        true
     }
 
     // ---------------------------------------------------------- stages

@@ -45,6 +45,10 @@ impl Surface {
                     self.used |= self.down;
                     return;
                 }
+                if self.sequencing(c) && !self.held_steps().is_empty() {
+                    self.edit_held_notes(i, step, c);
+                    return;
+                }
                 match self.mode {
                     Mode::Device => {
                         if i < PARAMS {

@@ -14,9 +14,11 @@ use crate::sound::{DRUM_NOTES, PARAMS};
 use crate::steps::{self, Layer, Stage};
 
 mod mode;
+mod sequencer;
 mod view;
 
 pub use mode::{Menu, Mode};
+pub use sequencer::{DRUM_NAMES, RESOLUTIONS};
 pub use view::View;
 
 /// Ableton's SysEx header for Push 2.
@@ -64,6 +66,7 @@ pub const SELECT: u8 = 48;
 pub const DELETE: u8 = 118;
 pub const LAYOUT: u8 = 31;
 pub const SCALE: u8 = 58;
+pub const ACCENT: u8 = 57;
 /// Scene buttons right of the pads, top (1/4) to bottom (1/32t).
 pub const SCENE_FIRST: u8 = 36;
 /// Buttons under the display, left to right.
@@ -223,6 +226,15 @@ pub struct Surface {
     before_scales: Mode,
     /// Turns towards the next detent, for encoders that pick from a list.
     turns: [i32; 8],
+    /// Drum sequencer: the sound (index into the drum pads), the page of
+    /// 32 steps shown, the step length (index into [`RESOLUTIONS`]).
+    pub drum: usize,
+    pub page: usize,
+    pub res: usize,
+    /// Step pads whose press added a note: their release keeps it.
+    added: u64,
+    /// Accent: pads play and steps add at full velocity.
+    pub accent: bool,
 }
 
 impl Default for Surface {
@@ -251,6 +263,11 @@ impl Surface {
             back_view: None,
             before_scales: Mode::Device,
             turns: [0; 8],
+            drum: 0,
+            page: 0,
+            res: 4,
+            added: 0,
+            accent: false,
         }
     }
 
@@ -450,6 +467,7 @@ impl Surface {
             }
             OCTAVE_UP => self.octave = (self.octave + 1).min(3),
             OCTAVE_DOWN => self.octave = (self.octave - 1).max(-3),
+            ACCENT => self.accent = !self.accent,
             QUANTIZE => {
                 c.next_quantize();
             }
@@ -459,6 +477,11 @@ impl Surface {
                     if let Some(&l) = Layer::ALL.get(scene) {
                         self.layer = l;
                     }
+                } else if self.sequencing(c) && !self.shift {
+                    // The step length; the page keeps its place in time.
+                    let at = self.page as f64 * self.resolution();
+                    self.res = scene;
+                    self.page = (at / self.resolution()) as usize;
                 } else if self.shift {
                     c.select(c.selected_track(), Some(scene));
                 } else {
@@ -485,6 +508,7 @@ impl Surface {
         self.end_notes(c);
         self.down = 0;
         self.used = 0;
+        self.added = 0;
         self.view = view;
     }
 
@@ -492,6 +516,8 @@ impl Surface {
         self.end_notes(c);
         self.down = 0;
         self.used = 0;
+        self.added = 0;
+        self.page = 0;
         c.select_track(track);
     }
 
@@ -515,8 +541,14 @@ impl Surface {
             }
             _ => None,
         };
+        let notes = if self.sequencing(c) {
+            let (t, s) = c.steps_slot();
+            c.notes(t, s)
+        } else {
+            None
+        };
         for index in 0..64 {
-            let led = self.pad_led(index, c, stages.as_ref());
+            let led = self.pad_led(index, c, stages.as_ref(), notes.as_ref());
             if self.pads[index] != Some(led) {
                 self.pads[index] = Some(led);
                 send(&mut out, 0x90, PAD_FIRST + index as u8, led);
@@ -539,7 +571,13 @@ impl Surface {
         let mut v = Vec::with_capacity(40);
         v.push((PLAY, Led::solid(if m.playing() { GREEN } else { GREY })));
         v.push((STOP, Led::solid(GREY)));
+        let sequencing = self.sequencing(c);
         for s in 0..8 {
+            if sequencing {
+                let led = Led::solid(if s == self.res { WHITE } else { SOFT });
+                v.push((SCENE_FIRST + s as u8, led));
+                continue;
+            }
             if self.view == View::Steps {
                 let led = match Layer::ALL.get(s) {
                     Some(&l) if l == self.layer => Led::solid(WHITE),
@@ -617,6 +655,7 @@ impl Surface {
         ));
         v.push((DEVICE, white(self.mode == Mode::Device)));
         v.push((SCALE, white(self.mode == Mode::Scales)));
+        v.push((ACCENT, white(self.accent)));
         v.push((MIX, white(matches!(self.mode, Mode::Mix(_)))));
         v.push((SHIFT, white(self.shift)));
         let mix = matches!(self.mode, Mode::Mix(_));
@@ -804,6 +843,58 @@ mod tests {
                 ..
             })
         ));
+    }
+
+    #[test]
+    fn drum_sequencer_adds_lengthens_edits_and_removes() {
+        let (c, _rx) = controls();
+        let mut s = Surface::new();
+        // Drums, scene 3, emptied.
+        c.edit_notes(0, 2, |clip| {
+            clip.notes.clear();
+            clip.beats = 4.0;
+        });
+        c.select(0, Some(2));
+        s.input(&[0xB0, NOTE, 127], &c);
+        s.input(&[0xB0, NOTE, 0], &c);
+        assert!(s.sequencing(&c));
+        // Snare (second sound pad), then step 5 (top row, fifth pad).
+        s.input(&[0x90, PAD_FIRST + 1, 100], &c);
+        s.input(&[0x80, PAD_FIRST + 1, 0], &c);
+        let step = |i: u8| PAD_FIRST + 56 + i;
+        s.input(&[0x90, step(4), 127], &c);
+        s.input(&[0x80, step(4), 0], &c);
+        let (beats, notes) = c.notes(0, 2).expect("note clip");
+        assert_eq!(beats, 4.0);
+        assert_eq!(notes.len(), 1);
+        assert_eq!((notes[0].start, notes[0].pitch), (1.0, 38));
+        // Hold step 1, tap step 3: one note over three steps.
+        s.input(&[0x90, step(0), 100], &c);
+        s.input(&[0x90, step(2), 100], &c);
+        s.input(&[0x80, step(2), 0], &c);
+        // Still held: the encoders edit its velocity.
+        s.input(&[0xB0, ENCODER_FIRST, 127 - 19], &c);
+        s.input(&[0x80, step(0), 0], &c);
+        let (_, notes) = c.notes(0, 2).unwrap();
+        assert_eq!(notes.len(), 2);
+        assert_eq!((notes[0].start, notes[0].length), (0.0, 0.75));
+        assert!((notes[0].velocity - (100.0 / 127.0 - 0.1)).abs() < 1e-3);
+        // The 1/8 scene button: step 3 now starts on beat 1, where the
+        // snare is; tapping it removes it.
+        s.input(&[0xB0, SCENE_FIRST + 2, 127], &c);
+        s.input(&[0x90, step(2), 100], &c);
+        s.input(&[0x80, step(2), 0], &c);
+        let (_, notes) = c.notes(0, 2).unwrap();
+        assert_eq!(notes.len(), 1);
+        // Hold page 1, tap page 2: two pages of 32 eighths.
+        let page = |i: u8| PAD_FIRST + 24 + 4 + i;
+        s.input(&[0x90, page(0), 100], &c);
+        s.input(&[0x90, page(1), 100], &c);
+        assert_eq!(c.notes(0, 2).unwrap().0, 32.0);
+        // Delete + snare pad clears the snare.
+        s.input(&[0xB0, DELETE, 127], &c);
+        s.input(&[0x90, PAD_FIRST + 1, 100], &c);
+        assert!(c.notes(0, 2).unwrap().1.is_empty());
     }
 
     #[test]

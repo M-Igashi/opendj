@@ -17,7 +17,7 @@ use slint::platform::software_renderer::{
 use slint::platform::{Platform, WindowAdapter};
 use slint::{Color, ComponentHandle, ModelRc, VecModel};
 
-use super::surface::{Mode, Surface, View};
+use super::surface::{Mode, Surface, View, DRUM_NAMES, RESOLUTIONS};
 use crate::control::{fader_text, pan_text, Controls, Mix};
 use crate::sound::PARAMS;
 use crate::{PushKnob, PushMenu, PushScreen, PushTrack};
@@ -218,7 +218,35 @@ impl Renderer {
         };
         let held = surface.held_stages();
         let lock_view = stages.as_ref().zip(held.first());
+        // Drum sequencer with steps held: their notes' velocity, length and
+        // chance.
+        let held_notes = if surface.sequencing(c) {
+            surface.held_notes(c)
+        } else {
+            Vec::new()
+        };
         let knobs: Vec<PushKnob> = match surface.mode {
+            _ if !held_notes.is_empty() => {
+                let n = held_notes[0];
+                let rgb = color(c.tracks[selected].color);
+                let knob = |name: &str, text: String, value: f32| PushKnob {
+                    name: name.into(),
+                    text: text.into(),
+                    value,
+                    bipolar: false,
+                    color: rgb,
+                };
+                let steps = n.length / surface.resolution();
+                vec![
+                    knob("Velocity", format!("{:.0}", n.velocity * 127.0), n.velocity),
+                    knob(
+                        "Length",
+                        format!("{steps:.2} steps"),
+                        (steps / 16.0).min(1.0) as f32,
+                    ),
+                    knob("Chance", format!("{:.0}%", n.chance * 100.0), n.chance),
+                ]
+            }
             _ if lock_view.is_some() => {
                 let (stages, &h) = lock_view.expect("checked");
                 let stage = &stages.stages[h];
@@ -346,6 +374,29 @@ impl Renderer {
             .map_or_else(|| "new".to_string(), |(n, _)| n);
         let title = match (surface.view, surface.mode) {
             (_, Mode::Scales) => format!("Scale · {}", c.key().name()),
+            (View::Note, _) if surface.sequencing(c) => {
+                let sound = DRUM_NAMES.get(surface.drum).copied().unwrap_or("Pad");
+                let held = surface.held_steps();
+                match held.first() {
+                    Some(h) => format!(
+                        "Note · {sound} · step {}{}",
+                        surface.page * 32 + h + 1,
+                        if held_notes.len() > 1 { " +" } else { "" }
+                    ),
+                    None => {
+                        let (beats, _) = c.notes(st, sc).unwrap_or((4.0, Vec::new()));
+                        let pages = (beats / (32.0 * surface.resolution()) - 1e-6)
+                            .ceil()
+                            .max(1.0);
+                        format!(
+                            "{sound} · {} · page {}/{pages} · {name} {}",
+                            RESOLUTIONS[surface.res].1,
+                            surface.page + 1,
+                            sc + 1
+                        )
+                    }
+                }
+            }
             (View::Note, _) => format!("Note · {name}"),
             (View::Steps, _) if stages.is_none() => {
                 format!("Steps · {name} {} holds notes: pick another scene", sc + 1)
