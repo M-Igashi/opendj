@@ -8,6 +8,7 @@ use std::sync::{Arc, Mutex};
 
 use crate::clip::{Clip, Sound, Track, MAX_TRACKS, SCENES};
 use crate::engine::{Command, Monitor, Program, Quantize};
+use crate::scale::Key;
 use crate::sound::{self, PARAMS};
 use crate::steps::Stages;
 
@@ -109,6 +110,8 @@ pub struct Controls {
     selected_track: AtomicUsize,
     selected_scene: AtomicI32,
     quantize: AtomicU8,
+    /// The key the pads play in and stage clips are written in.
+    key: Mutex<Key>,
     /// Goes up on every change, so a screen can tell when to redraw.
     version: AtomicU64,
 }
@@ -154,6 +157,7 @@ impl Controls {
             selected_track: AtomicUsize::new(0),
             selected_scene: AtomicI32::new(-1),
             quantize: AtomicU8::new(0),
+            key: Mutex::new(Key::default()),
             version: AtomicU64::new(1),
         }
     }
@@ -236,11 +240,47 @@ impl Controls {
         if slot.is_some() && stages == before {
             return true;
         }
-        *slot = Some(stages.clip(&name, sound));
+        *slot = Some(stages.clip(&name, sound, &self.key()));
         self.send(Command::Program(Program::compile(&set)));
         drop(set);
         self.bump();
         true
+    }
+
+    // ------------------------------------------------------------- key
+
+    pub fn key(&self) -> Key {
+        self.key.lock().map_or(Key::default(), |k| *k)
+    }
+
+    /// Changes the key; stage clips are rewritten in it.
+    pub fn edit_key(&self, f: impl FnOnce(&mut Key)) {
+        let Ok(mut k) = self.key.lock() else {
+            return;
+        };
+        let before = *k;
+        f(&mut k);
+        let key = *k;
+        drop(k);
+        if key == before {
+            return;
+        }
+        if let Ok(mut set) = self.set.lock() {
+            let mut changed = false;
+            for tr in set.iter_mut() {
+                let sound = tr.sound;
+                for clip in tr.slots.iter_mut().flatten() {
+                    if let Some(st) = clip.stages.as_deref() {
+                        *clip = st.clip(&clip.name, sound, &key);
+                        changed = true;
+                    }
+                }
+            }
+            if changed {
+                self.send(Command::Program(Program::compile(&set)));
+            }
+        }
+        self.bump();
     }
 
     // ------------------------------------------------------- launching

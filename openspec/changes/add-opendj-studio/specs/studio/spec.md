@@ -53,3 +53,10 @@ openDJ Studio SHALL open an Ableton Live set (`.als`, gzipped or plain XML) give
 #### Scenario: More than eight tracks on Push
 - **WHEN** a 12-track set is open and the ninth track is selected
 - **THEN** Push's pads, track buttons, encoders and screen show tracks 9 to 12
+
+### Requirement: Scales on Push 2
+openDJ Studio SHALL keep one key for the set, a scale and a root, that Push's Note view plays and stage clips are written in. Push's Scale button SHALL open a Scales mode where the buttons over and under the screen pick the root (around the circle of fifths) and step through the scales, and the encoders pick scale, root, pad layout (fourths up or right, thirds, octaves, sequential) and in-key or chromatic pads. Changing the key SHALL rewrite stage clips in it. Holding Session, Note or Scale SHALL show that view or mode only until the button is let go.
+
+#### Scenario: Playing in another key
+- **WHEN** Scale is pressed, then C and Major are picked and Scale is pressed again
+- **THEN** the Note view's bottom-left pad plays C, its pads light the scale's notes with C in the track's colour, and stage clips play in C major

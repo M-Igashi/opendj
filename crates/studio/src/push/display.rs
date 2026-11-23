@@ -17,10 +17,10 @@ use slint::platform::software_renderer::{
 use slint::platform::{Platform, WindowAdapter};
 use slint::{Color, ComponentHandle, ModelRc, VecModel};
 
-use super::surface::{Encoders, Mode, Surface};
+use super::surface::{Mode, Surface, View};
 use crate::control::{fader_text, pan_text, Controls, Mix};
 use crate::sound::PARAMS;
-use crate::{PushKnob, PushScreen, PushTrack};
+use crate::{PushKnob, PushMenu, PushScreen, PushTrack};
 
 pub const WIDTH: usize = 960;
 pub const HEIGHT: usize = 160;
@@ -155,9 +155,11 @@ pub struct Renderer {
     ui: PushScreen,
     tracks: Rc<VecModel<PushTrack>>,
     knobs: Rc<VecModel<PushKnob>>,
+    upper: Rc<VecModel<PushMenu>>,
+    lower: Rc<VecModel<PushMenu>>,
     frame: Frame,
     /// The page last shown, to flash its name when it changes.
-    page: Option<(Mode, Encoders, crate::steps::Layer)>,
+    page: Option<(View, Mode, crate::steps::Layer)>,
     toast_until: Option<Instant>,
 }
 
@@ -171,11 +173,16 @@ impl Renderer {
         let knobs = Rc::new(VecModel::default());
         ui.set_tracks(ModelRc::from(tracks.clone()));
         ui.set_knobs(ModelRc::from(knobs.clone()));
+        let (upper, lower) = (Rc::new(VecModel::default()), Rc::new(VecModel::default()));
+        ui.set_upper_menu(ModelRc::from(upper.clone()));
+        ui.set_lower_menu(ModelRc::from(lower.clone()));
         Ok(Renderer {
             window,
             ui,
             tracks,
             knobs,
+            upper,
+            lower,
             frame: Frame::new(),
             page: None,
             toast_until: None,
@@ -204,14 +211,14 @@ impl Renderer {
 
         // Steps mode with stages held: the knobs show (and set) their locks.
         let (st, sc) = c.steps_slot();
-        let stages = if surface.mode == Mode::Steps {
+        let stages = if surface.view == View::Steps {
             c.stages(st, sc)
         } else {
             None
         };
         let held = surface.held_stages();
         let lock_view = stages.as_ref().zip(held.first());
-        let knobs: Vec<PushKnob> = match surface.encoders {
+        let knobs: Vec<PushKnob> = match surface.mode {
             _ if lock_view.is_some() => {
                 let (stages, &h) = lock_view.expect("checked");
                 let stage = &stages.stages[h];
@@ -234,7 +241,7 @@ impl Renderer {
                     })
                     .collect()
             }
-            Encoders::Device => {
+            Mode::Device => {
                 let rgb = color(c.tracks[selected].color);
                 (0..PARAMS)
                     .map(|i| PushKnob {
@@ -246,7 +253,7 @@ impl Renderer {
                     })
                     .collect()
             }
-            Encoders::Mix(mix) => {
+            Mode::Mix(mix) => {
                 let mut v: Vec<PushKnob> = c
                     .tracks
                     .iter()
@@ -284,19 +291,66 @@ impl Renderer {
                 }
                 v
             }
+            Mode::Scales => {
+                let key = c.key();
+                let n = crate::scale::SCALES.len();
+                let layouts = crate::scale::Layout::ALL;
+                let at = layouts.iter().position(|l| *l == key.layout).unwrap_or(0);
+                let knob = |name: &str, text: String, value: f32| PushKnob {
+                    name: name.into(),
+                    text: text.into(),
+                    value,
+                    bipolar: false,
+                    color: color(ACCENT),
+                };
+                vec![
+                    knob(
+                        "Scale",
+                        key.scale().name.to_string(),
+                        key.scale as f32 / (n - 1) as f32,
+                    ),
+                    knob(
+                        "Root",
+                        crate::scale::NOTE_NAMES[key.root as usize].to_string(),
+                        key.root as f32 / 11.0,
+                    ),
+                    knob(
+                        "Layout",
+                        key.layout.label().to_string(),
+                        at as f32 / (layouts.len() - 1) as f32,
+                    ),
+                    knob(
+                        "Pads",
+                        if key.chromatic { "Chromatic" } else { "In key" }.to_string(),
+                        key.chromatic as u8 as f32,
+                    ),
+                ]
+            }
         };
         set_rows(&self.knobs, knobs);
+        let (upper, lower) = surface.menus(c).unwrap_or_default();
+        let menu = |m: Vec<super::surface::Menu>| {
+            m.into_iter()
+                .map(|m| PushMenu {
+                    label: m.label.into(),
+                    on: m.on,
+                })
+                .collect()
+        };
+        set_rows(&self.upper, menu(upper));
+        set_rows(&self.lower, menu(lower));
 
         let name = &c.tracks[selected].name;
         let clip_name = c
             .clip_info(st, sc)
             .map_or_else(|| "new".to_string(), |(n, _)| n);
-        let title = match (surface.mode, surface.encoders) {
-            (Mode::Note, _) => format!("Note · {name}"),
-            (Mode::Steps, _) if stages.is_none() => {
+        let title = match (surface.view, surface.mode) {
+            (_, Mode::Scales) => format!("Scale · {}", c.key().name()),
+            (View::Note, _) => format!("Note · {name}"),
+            (View::Steps, _) if stages.is_none() => {
                 format!("Steps · {name} {} holds notes: pick another scene", sc + 1)
             }
-            (Mode::Steps, _) if !held.is_empty() => format!(
+            (View::Steps, _) if !held.is_empty() => format!(
                 "Locks · stage {} · {name} {}",
                 held.iter()
                     .map(|h| (h + 1).to_string())
@@ -304,15 +358,15 @@ impl Renderer {
                     .join("+"),
                 sc + 1
             ),
-            (Mode::Steps, _) => format!(
+            (View::Steps, _) => format!(
                 "Steps · {} · {name} {} {clip_name}",
                 surface.layer.label(),
                 sc + 1
             ),
-            (_, Encoders::Device) => format!("Device · {name}"),
-            (_, Encoders::Mix(mix)) => format!("Mix · {}", mix.label()),
+            (_, Mode::Device) => format!("Device · {name}"),
+            (_, Mode::Mix(mix)) => format!("Mix · {}", mix.label()),
         };
-        let page = (surface.mode, surface.encoders, surface.layer);
+        let page = (surface.view, surface.mode, surface.layer);
         if self.page.is_some_and(|p| p != page) {
             self.ui.set_toast(title.as_str().into());
             self.ui.set_toast_visible(true);

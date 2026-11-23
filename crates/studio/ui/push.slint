@@ -19,6 +19,12 @@ export struct PushKnob {
     color: color,
 }
 
+// A button over or under the screen with a job of its own in this mode.
+export struct PushMenu {
+    label: string,
+    on: bool,
+}
+
 global PushTheme {
     out property <color> bg: #0c0d0e;
     out property <color> text: #ecedef;
@@ -155,6 +161,23 @@ component TrackTab inherits Rectangle {
     }
 }
 
+component MenuCell inherits Rectangle {
+    in property <PushMenu> item;
+    border-radius: 4px;
+    background: item.on ? PushTheme.accent : transparent;
+    border-width: item.on ? 0 : 1px;
+    border-color: PushTheme.faint;
+    Text {
+        text: item.label;
+        color: item.on ? #0c0d0e : PushTheme.text;
+        font-size: 13px;
+        font-weight: 600;
+        horizontal-alignment: center;
+        vertical-alignment: center;
+        overflow: elide;
+    }
+}
+
 export component PushScreen inherits Window {
     width: 960px;
     height: 160px;
@@ -171,6 +194,11 @@ export component PushScreen inherits Window {
     // A short message over the knobs (a page or mode change).
     in property <string> toast;
     in property <bool> toast-visible;
+    // Labels for the buttons over and under the screen, when the mode gives
+    // them jobs of their own; empty otherwise.
+    in property <[PushMenu]> upper-menu;
+    in property <[PushMenu]> lower-menu;
+    property <bool> menus: upper-menu.length > 0;
 
     property <length> col-w: 120px;
 
@@ -181,7 +209,7 @@ export component PushScreen inherits Window {
         width: col-w - 20px;
         height: 16px;
         border-radius: 3px;
-        visible: t.progress >= 0;
+        visible: t.progress >= 0 && !root.menus;
         background: t.stopping && mod(beat * 2, 1) < 0.5 ? PushTheme.red : PushTheme.red.with-alpha(0.22);
         Text {
             text: "STOP";
@@ -192,6 +220,7 @@ export component PushScreen inherits Window {
     }
     // Where we are, top right.
     HorizontalLayout {
+        visible: !root.menus;
         width: self.preferred-width;
         x: parent.width - self.width - 10px;
         y: 2px;
@@ -251,7 +280,22 @@ export component PushScreen inherits Window {
 
     Rectangle { y: 131px; height: 1px; background: PushTheme.faint; }
     // Over the lower buttons: the tracks.
+    for m[i] in upper-menu: MenuCell {
+        x: i * col-w + 6px;
+        y: 2px;
+        width: col-w - 12px;
+        height: 20px;
+        item: m;
+    }
+    for m[i] in lower-menu: MenuCell {
+        x: i * col-w + 6px;
+        y: 134px;
+        width: col-w - 12px;
+        height: 24px;
+        item: m;
+    }
     for t[i] in tracks: TrackTab {
+        visible: !root.menus;
         x: i * col-w + 6px;
         y: 134px;
         width: col-w - 12px;

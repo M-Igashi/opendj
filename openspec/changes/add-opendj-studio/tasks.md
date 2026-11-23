@@ -24,6 +24,9 @@
 - [ ] 2.10 Try Steps mode on hardware (macOS)
 - [x] 2.11 Open an Ableton Live set (.als): tracks with colours, volume and pan, return names, MIDI clips, audio clips following their warp markers (key kept), device lists shown; Push pages tracks in banks of 8
 - [ ] 2.12 Open a real Live set with its recordings on hardware (macOS)
+- [x] 2.13 Push views (pads) and modes (encoders, screen buttons) apart; buttons report press, release and hold; held Session, Note or Scale only peek
+- [x] 2.14 Scales mode on Push: 32 scales, root, five pad layouts, in key or chromatic; stage clips follow the key
+- [ ] 2.15 Try Scales mode and peeking on hardware (macOS)
 
 ## 3. Clip editing
 

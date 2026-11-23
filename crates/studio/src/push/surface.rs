@@ -4,11 +4,20 @@
 //!
 //! Numbers from Ableton's "Push 2 MIDI and Display Interface Manual".
 
+use std::time::{Duration, Instant};
+
 use crate::clip::{Sound, SCENES};
 use crate::control::{Controls, Mix};
 use crate::engine::SlotState;
+use crate::scale::{LOWER_ROOTS, UPPER_ROOTS};
 use crate::sound::{DRUM_NOTES, PARAMS};
-use crate::steps::{self, Layer, Stage, ROOT, SCALE};
+use crate::steps::{self, Layer, Stage};
+
+mod mode;
+mod view;
+
+pub use mode::{Menu, Mode};
+pub use view::View;
 
 /// Ableton's SysEx header for Push 2.
 pub const SYSEX: [u8; 6] = [0xF0, 0x00, 0x21, 0x1D, 0x01, 0x01];
@@ -54,13 +63,14 @@ pub const QUANTIZE: u8 = 116;
 pub const SELECT: u8 = 48;
 pub const DELETE: u8 = 118;
 pub const LAYOUT: u8 = 31;
+pub const SCALE: u8 = 58;
 /// Scene buttons right of the pads, top (1/4) to bottom (1/32t).
 pub const SCENE_FIRST: u8 = 36;
 /// Buttons under the display, left to right.
 pub const LOWER_FIRST: u8 = 20;
 /// Buttons over the display, left to right.
 pub const UPPER_FIRST: u8 = 102;
-/// Encoders over the display, left to right.
+/// Mode over the display, left to right.
 pub const ENCODER_FIRST: u8 = 71;
 pub const MASTER_ENCODER: u8 = 79;
 pub const TEMPO_ENCODER: u8 = 14;
@@ -142,26 +152,17 @@ pub fn palette(track_colors: &[u32]) -> Vec<Vec<u8>> {
     out
 }
 
-/// What the pads do.
+/// What happened to a button.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Mode {
-    /// 8 tracks by 8 scenes of clips.
-    Session,
-    /// The selected track's instrument: drum pads or a keyboard in key.
-    Note,
-    /// The selected stage clip: a column per stage, the scene buttons
-    /// pick what the pads set.
-    Steps,
+pub enum Press {
+    Down,
+    Up,
+    /// Still held after [`LONG_PRESS`]; its Up comes later.
+    Long,
 }
 
-/// What the eight encoders over the display turn.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Encoders {
-    /// The selected track's instrument knobs.
-    Device,
-    /// One mixer control across the tracks.
-    Mix(Mix),
-}
+/// How long a button is held before it counts as held rather than tapped.
+pub const LONG_PRESS: Duration = Duration::from_millis(400);
 
 /// One light: a colour, and optionally an animation towards a second one.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -193,12 +194,12 @@ impl Led {
 }
 
 pub struct Surface {
+    pub view: View,
     pub mode: Mode,
-    pub encoders: Encoders,
     shift: bool,
-    /// Octaves up or down from each sound's home range in Note mode.
+    /// Octaves up or down from each sound's home range in the Note view.
     octave: i32,
-    /// Pitch held by each pad in Note mode, to end it on release.
+    /// Pitch held by each pad in the Note view, to end it on release.
     held: [Option<(usize, u8)>; 64],
     /// What each light was last told; None until first sent.
     pads: [Option<Led>; 64],
@@ -207,11 +208,21 @@ pub struct Surface {
     touched: Option<usize>,
     pub layer: Layer,
     select: bool,
-    /// Steps mode pads held down, by pad index.
+    /// Steps view pads held down, by pad index.
     down: u64,
     /// Held pads already used (for locks or a semitone): their release
     /// sets nothing.
     used: u64,
+    /// When each button went down, while it is down.
+    pressed: [Option<Instant>; 128],
+    /// Buttons whose press has turned into a long press.
+    long: u128,
+    /// The view a held Session or Note button goes back to on release.
+    back_view: Option<View>,
+    /// The mode Scale goes back to.
+    before_scales: Mode,
+    /// Turns towards the next detent, for encoders that pick from a list.
+    turns: [i32; 8],
 }
 
 impl Default for Surface {
@@ -223,8 +234,8 @@ impl Default for Surface {
 impl Surface {
     pub fn new() -> Surface {
         Surface {
-            mode: Mode::Session,
-            encoders: Encoders::Device,
+            view: View::Session,
+            mode: Mode::Device,
             shift: false,
             octave: 0,
             held: [None; 64],
@@ -235,6 +246,11 @@ impl Surface {
             select: false,
             down: 0,
             used: 0,
+            pressed: [None; 128],
+            long: 0,
+            back_view: None,
+            before_scales: Mode::Device,
+            turns: [0; 8],
         }
     }
 
@@ -290,129 +306,102 @@ impl Surface {
                     };
                     self.encoder(data1, delta, c);
                 } else {
-                    self.button(data1, data2 > 0, c);
+                    let i = (data1 & 0x7F) as usize;
+                    if data2 > 0 {
+                        self.pressed[i] = Some(Instant::now());
+                        self.long &= !(1u128 << i);
+                        self.button(data1, Press::Down, c);
+                    } else {
+                        self.pressed[i] = None;
+                        self.button(data1, Press::Up, c);
+                    }
                 }
             }
             _ => {}
         }
     }
 
-    fn pad(&mut self, index: usize, velocity: u8, c: &Controls) {
-        let (row, col) = (index / 8, index % 8);
-        match self.mode {
-            Mode::Session => {
-                if velocity == 0 {
-                    return;
+    /// Sends a Long press for buttons held past [`LONG_PRESS`] at `now`;
+    /// called every few milliseconds.
+    pub fn tick(&mut self, now: Instant, c: &Controls) {
+        for i in 0..128 {
+            let Some(at) = self.pressed[i] else { continue };
+            if self.long & (1u128 << i) == 0 && now.duration_since(at) >= LONG_PRESS {
+                self.long |= 1u128 << i;
+                self.button(i as u8, Press::Long, c);
+            }
+        }
+    }
+
+    /// Whether the button's latest press became a long one.
+    fn was_long(&self, cc: u8) -> bool {
+        self.long & (1u128 << (cc & 0x7F)) != 0
+    }
+
+    fn button(&mut self, cc: u8, press: Press, c: &Controls) {
+        let down = press == Press::Down;
+        match (cc, press) {
+            (SHIFT, Press::Long) | (SELECT, Press::Long) => return,
+            (SHIFT, _) => {
+                self.shift = down;
+                return;
+            }
+            (SELECT, _) => {
+                self.select = down;
+                return;
+            }
+            // A held Session or Note button only peeks at its view.
+            (SESSION | NOTE, Press::Up) => {
+                if let Some(back) = self.back_view.take() {
+                    if self.was_long(cc) {
+                        self.set_view(back, c);
+                    }
                 }
-                let (track, scene) = (bank(c) + col, 7 - row);
-                if track >= c.tracks.len() || scene >= SCENES {
-                    return;
-                }
-                if self.shift {
-                    c.select(track, Some(scene));
+                return;
+            }
+            // Scale: tap to open or close, hold to peek.
+            (SCALE, Press::Down) => {
+                if self.mode == Mode::Scales {
+                    self.mode = self.before_scales;
                 } else {
-                    c.launch(track, scene);
+                    self.before_scales = self.mode;
+                    self.mode = Mode::Scales;
                 }
+                return;
             }
-            Mode::Note => {
-                if velocity == 0 {
-                    if let Some((track, pitch)) = self.held[index].take() {
-                        c.note(track, pitch, 0.0);
-                    }
-                    return;
+            (SCALE, Press::Up) => {
+                if self.was_long(cc) && self.mode == Mode::Scales {
+                    self.mode = self.before_scales;
                 }
-                let track = c.selected_track();
-                if let Some(pitch) = self.note_pitch(c, track, row, col) {
-                    if let Some((t, p)) = self.held[index].take() {
-                        c.note(t, p, 0.0);
-                    }
-                    self.held[index] = Some((track, pitch));
-                    c.note(track, pitch, velocity as f32 / 127.0);
-                }
+                return;
             }
-            Mode::Steps => self.step_pad(index, velocity > 0, c),
-        }
-    }
-
-    fn step_pad(&mut self, index: usize, down: bool, c: &Controls) {
-        let (row, col) = (index / 8, index % 8);
-        let bit = 1u64 << index;
-        let (t, s) = c.steps_slot();
-        if down {
-            self.down |= bit;
-            // Two neighbouring pitch pads: the semitone between.
-            if self.layer == Layer::Pitch {
-                let below = row > 0 && self.down & (bit >> 8) != 0;
-                let above = row < 7 && self.down & (bit << 8) != 0;
-                if below || above {
-                    let low = if below { row - 1 } else { row };
-                    c.edit_stages(t, s, |st| {
-                        let stage = &mut st.stages[col];
-                        stage.degree = low as u8;
-                        stage.sharp = true;
-                    });
-                    self.used |= bit | if below { bit >> 8 } else { bit << 8 };
-                }
-            }
-            return;
-        }
-        self.down &= !bit;
-        if self.used & bit != 0 {
-            self.used &= !bit;
-            return;
-        }
-        let (layer, select, shift) = (self.layer, self.select, self.shift);
-        c.edit_stages(t, s, |st| {
-            steps::press(&mut st.stages[col], layer, row as u8, select, shift)
-        });
-    }
-
-    /// The note pad (`row` from the bottom, `col`) plays on `track`.
-    fn note_pitch(&self, c: &Controls, track: usize, row: usize, col: usize) -> Option<u8> {
-        let sound = c.tracks.get(track)?.sound;
-        if let Sound::Drums(_) = sound {
-            // A 4x4 block in the bottom left.
-            if row >= 4 || col >= 4 {
-                return None;
-            }
-            return DRUM_NOTES.get(row * 4 + col).copied();
-        }
-        let home: i32 = match sound {
-            Sound::Bass => 33,
-            Sound::Pad => 45,
-            _ => 57,
-        };
-        // In key: a scale step to the right, a fourth (three steps) up.
-        let degree = row * 3 + col;
-        let pitch = home + self.octave * 12 + SCALE[degree % 7] as i32 + 12 * (degree / 7) as i32;
-        u8::try_from(pitch).ok().filter(|p| *p < 128)
-    }
-
-    fn button(&mut self, cc: u8, down: bool, c: &Controls) {
-        if cc == SHIFT {
-            self.shift = down;
-            return;
-        }
-        if cc == SELECT {
-            self.select = down;
-            return;
+            _ => {}
         }
         if !down {
+            return;
+        }
+        if self.mode == Mode::Scales && self.scale_button(cc, c) {
             return;
         }
         let tracks = c.tracks.len();
         match cc {
             PLAY => c.toggle_play(),
             STOP => c.stop_all(),
-            SESSION => self.set_mode(Mode::Session, c),
+            SESSION => {
+                self.back_view = Some(self.view);
+                self.set_view(View::Session, c);
+            }
             // Again (or Layout): between the keyboard and the stages.
             NOTE | LAYOUT => {
-                let next = match (cc, self.mode) {
-                    (_, Mode::Note) => Mode::Steps,
-                    (LAYOUT, Mode::Session) => Mode::Session,
-                    _ => Mode::Note,
+                let next = match (cc, self.view) {
+                    (_, View::Note) => View::Steps,
+                    (LAYOUT, View::Session) => View::Session,
+                    _ => View::Note,
                 };
-                self.set_mode(next, c);
+                if cc == NOTE {
+                    self.back_view = Some(self.view);
+                }
+                self.set_view(next, c);
             }
             DELETE => {
                 // Clears the held stages' locks.
@@ -427,18 +416,18 @@ impl Surface {
                     self.used |= self.down;
                 }
             }
-            DEVICE => self.encoders = Encoders::Device,
+            DEVICE => self.mode = Mode::Device,
             MIX => {
                 // Again: the next mixer control.
-                self.encoders = match self.encoders {
-                    Encoders::Mix(m) => Encoders::Mix(Mix::ALL[(m as usize + 1) % 4]),
-                    Encoders::Device => Encoders::Mix(Mix::Volume),
+                self.mode = match self.mode {
+                    Mode::Mix(m) => Mode::Mix(Mix::ALL[(m as usize + 1) % 4]),
+                    _ => Mode::Mix(Mix::Volume),
                 };
             }
             PAGE_LEFT | PAGE_RIGHT => {
-                if let Encoders::Mix(m) = self.encoders {
+                if let Mode::Mix(m) = self.mode {
                     let step = if cc == PAGE_RIGHT { 1 } else { 3 };
-                    self.encoders = Encoders::Mix(Mix::ALL[(m as usize + step) % 4]);
+                    self.mode = Mode::Mix(Mix::ALL[(m as usize + step) % 4]);
                 }
             }
             LEFT | RIGHT => {
@@ -466,7 +455,7 @@ impl Surface {
             }
             cc if (SCENE_FIRST..SCENE_FIRST + 8).contains(&cc) => {
                 let scene = (cc - SCENE_FIRST) as usize;
-                if self.mode == Mode::Steps && !self.shift {
+                if self.view == View::Steps && !self.shift {
                     if let Some(&l) = Layer::ALL.get(scene) {
                         self.layer = l;
                     }
@@ -492,11 +481,11 @@ impl Surface {
         }
     }
 
-    fn set_mode(&mut self, mode: Mode, c: &Controls) {
+    fn set_view(&mut self, view: View, c: &Controls) {
         self.end_notes(c);
         self.down = 0;
         self.used = 0;
-        self.mode = mode;
+        self.view = view;
     }
 
     fn set_track(&mut self, track: usize, c: &Controls) {
@@ -515,54 +504,12 @@ impl Surface {
         }
     }
 
-    fn encoder(&mut self, cc: u8, delta: i32, c: &Controls) {
-        // About 210 steps a turn: a full sweep in one turn, finer with Shift.
-        let step = if self.shift { 0.001 } else { 0.005 } * delta as f32;
-        match cc {
-            TEMPO_ENCODER => c.tempo_step(if self.shift { 0.1 } else { 1.0 } * delta as f64),
-            MASTER_ENCODER => c.set_main_volume(c.main_volume() + step),
-            _ => {
-                let i = (cc - ENCODER_FIRST) as usize;
-                let held = self.held_stages();
-                if self.mode == Mode::Steps && !held.is_empty() {
-                    // Held stages: a lock on each, from where it was.
-                    if i < PARAMS {
-                        let (t, s) = c.steps_slot();
-                        let now = c.param(t, i);
-                        c.edit_stages(t, s, |st| {
-                            for &h in &held {
-                                let l = &mut st.stages[h].locks[i];
-                                *l = Some((l.unwrap_or(now) + step).clamp(0.0, 1.0));
-                            }
-                        });
-                    }
-                    self.used |= self.down;
-                    return;
-                }
-                match self.encoders {
-                    Encoders::Device => {
-                        if i < PARAMS {
-                            let t = c.selected_track();
-                            c.set_param(t, i, c.param(t, i) + step);
-                        }
-                    }
-                    Encoders::Mix(m) => {
-                        let t = bank(c) + i;
-                        if t < c.tracks.len() {
-                            c.set_mix(t, m, c.mix(t, m) + step);
-                        }
-                    }
-                }
-            }
-        }
-    }
-
     /// The messages that bring every light up to date; only changes are
     /// sent.
     pub fn lights(&mut self, c: &Controls) -> Vec<[u8; 3]> {
         let mut out = Vec::new();
-        let stages = match self.mode {
-            Mode::Steps => {
+        let stages = match self.view {
+            View::Steps => {
                 let (t, s) = c.steps_slot();
                 c.stages(t, s)
             }
@@ -585,55 +532,6 @@ impl Surface {
         out
     }
 
-    fn pad_led(&self, index: usize, c: &Controls, stages: Option<&steps::Stages>) -> Led {
-        let (row, col) = (index / 8, index % 8);
-        let m = &c.monitor;
-        match self.mode {
-            Mode::Session => {
-                let (t, s) = (bank(c) + col, 7 - row);
-                if t >= c.tracks.len() {
-                    return Led::OFF;
-                }
-                match m.slot(t, s) {
-                    // Before the audio thread's first report.
-                    SlotState::Empty if c.has_clip(t, s) => Led::solid(track_dim(t)),
-                    SlotState::Empty => Led::OFF,
-                    SlotState::Stopped => Led::solid(track_dim(t)),
-                    SlotState::Queued => Led::animate(track_dim(t), BLINK_EIGHTH, GREEN),
-                    SlotState::Playing if m.stopping(t) => {
-                        Led::animate(track_color(t), BLINK_EIGHTH, RED)
-                    }
-                    SlotState::Playing => Led::animate(track_color(t), PULSE_QUARTER, WHITE),
-                }
-            }
-            Mode::Note => {
-                let t = c.selected_track();
-                if self.held[index].is_some() {
-                    return Led::solid(GREEN);
-                }
-                let Some(pitch) = self.note_pitch(c, t, row, col) else {
-                    return Led::OFF;
-                };
-                if c.tracks[t].drums() || (pitch + 12 - ROOT).is_multiple_of(12) {
-                    Led::solid(track_color(t))
-                } else {
-                    Led::solid(SOFT)
-                }
-            }
-            Mode::Steps => {
-                if self.down & (1 << index) != 0 {
-                    return Led::solid(GREEN);
-                }
-                let (t, s) = c.steps_slot();
-                let Some(st) = stages else {
-                    return Led::OFF;
-                };
-                let playing = m.slot(t, s) == SlotState::Playing && m.stage(t) == Some(col);
-                step_led(&st.stages[col], self.layer, row as u8, t, playing)
-            }
-        }
-    }
-
     fn button_leds(&self, c: &Controls) -> Vec<(u8, Led)> {
         let m = &c.monitor;
         let tracks = c.tracks.len();
@@ -642,7 +540,7 @@ impl Surface {
         v.push((PLAY, Led::solid(if m.playing() { GREEN } else { GREY })));
         v.push((STOP, Led::solid(GREY)));
         for s in 0..8 {
-            if self.mode == Mode::Steps {
+            if self.view == View::Steps {
                 let led = match Layer::ALL.get(s) {
                     Some(&l) if l == self.layer => Led::solid(WHITE),
                     Some(_) => Led::solid(SOFT),
@@ -666,7 +564,14 @@ impl Surface {
             v.push((SCENE_FIRST + s as u8, led));
         }
         let selected = c.selected_track();
+        let scales = self.mode == Mode::Scales;
+        if scales {
+            v.extend(self.scale_leds(c));
+        }
         for t in bank(c)..bank(c) + 8 {
+            if scales {
+                break;
+            }
             let lower = if t >= tracks {
                 Led::OFF
             } else if t == selected {
@@ -685,12 +590,12 @@ impl Surface {
             };
             v.push((UPPER_FIRST + (t % 8) as u8, upper));
         }
-        v.push((SESSION, white(self.mode == Mode::Session)));
-        v.push((NOTE, white(matches!(self.mode, Mode::Note | Mode::Steps))));
-        let steps = self.mode == Mode::Steps;
+        v.push((SESSION, white(self.view == View::Session)));
+        v.push((NOTE, white(matches!(self.view, View::Note | View::Steps))));
+        let steps = self.view == View::Steps;
         v.push((
             LAYOUT,
-            Led::solid(if steps || self.mode == Mode::Note {
+            Led::solid(if steps || self.view == View::Note {
                 W_DIM
             } else {
                 W_OFF
@@ -710,17 +615,18 @@ impl Surface {
             DELETE,
             Led::solid(if steps && self.down != 0 { W_ON } else { W_OFF }),
         ));
-        v.push((DEVICE, white(self.encoders == Encoders::Device)));
-        v.push((MIX, white(matches!(self.encoders, Encoders::Mix(_)))));
+        v.push((DEVICE, white(self.mode == Mode::Device)));
+        v.push((SCALE, white(self.mode == Mode::Scales)));
+        v.push((MIX, white(matches!(self.mode, Mode::Mix(_)))));
         v.push((SHIFT, white(self.shift)));
-        let mix = matches!(self.encoders, Encoders::Mix(_));
+        let mix = matches!(self.mode, Mode::Mix(_));
         for cc in [PAGE_LEFT, PAGE_RIGHT] {
             v.push((cc, Led::solid(if mix { W_DIM } else { W_OFF })));
         }
         for cc in [LEFT, RIGHT, UP, DOWN, QUANTIZE] {
             v.push((cc, Led::solid(W_DIM)));
         }
-        let note = self.mode == Mode::Note;
+        let note = self.view == View::Note;
         for cc in [OCTAVE_DOWN, OCTAVE_UP] {
             v.push((cc, Led::solid(if note { W_DIM } else { W_OFF })));
         }
@@ -737,96 +643,6 @@ impl Surface {
             out.push([0xB0, cc, 0]);
         }
         out
-    }
-}
-
-/// A Steps mode pad: `row` (from the bottom) of `stage` on `layer`.
-fn step_led(stage: &Stage, layer: Layer, row: u8, t: usize, playing: bool) -> Led {
-    let on = Led::solid(if playing { WHITE } else { track_color(t) });
-    let dim = Led::solid(track_dim(t));
-    // A bar up to `level` rows (1..=8).
-    let bar = |level: u8| {
-        if row + 1 == level {
-            on
-        } else if row + 1 < level {
-            dim
-        } else {
-            Led::OFF
-        }
-    };
-    if stage.skip && layer != Layer::Chance {
-        return if row == 0 {
-            Led::solid(RED_DIM)
-        } else {
-            Led::OFF
-        };
-    }
-    match layer {
-        Layer::Pitch => {
-            if row == stage.degree {
-                if stage.sharp {
-                    Led::solid(AMBER)
-                } else {
-                    on
-                }
-            } else if stage.sharp && row == stage.degree + 1 {
-                Led::solid(AMBER)
-            } else {
-                Led::OFF
-            }
-        }
-        Layer::Octave => {
-            let at = (stage.octave + 3).clamp(0, 7) as u8;
-            if row == at {
-                on
-            } else if row == 3 {
-                Led::solid(GREY)
-            } else {
-                Led::OFF
-            }
-        }
-        Layer::Velocity => bar((stage.velocity * 8.0).round().clamp(1.0, 8.0) as u8),
-        Layer::Gate => {
-            if row >= stage.pulses {
-                Led::OFF
-            } else if stage.gate(row)
-                || (stage.tie && stage.gates != 0 && row > stage.gates.trailing_zeros() as u8)
-            {
-                if stage.tie && !stage.gate(row) {
-                    dim
-                } else {
-                    on
-                }
-            } else {
-                Led::solid(GREY)
-            }
-        }
-        Layer::Chance => {
-            if row == 0 {
-                Led::solid(if stage.skip { RED } else { GREY })
-            } else if stage.skip {
-                Led::OFF
-            } else {
-                let level = (stage.chance * 7.0).round() as u8 + 1;
-                bar(level)
-            }
-        }
-        Layer::Locks => {
-            let level = (stage.lock_amount * 7.0).round() as u8 + 1;
-            if !stage.has_locks() {
-                if row < level {
-                    Led::solid(GREY)
-                } else {
-                    Led::OFF
-                }
-            } else if row + 1 == level {
-                Led::solid(if playing { track_color(t) } else { WHITE })
-            } else if row + 1 < level {
-                Led::solid(SOFT)
-            } else {
-                Led::OFF
-            }
-        }
     }
 }
 
@@ -912,7 +728,7 @@ mod tests {
         assert!(matches!(rx.pop(), Ok(Command::Volume { track: 2, .. })));
         // Mix again: pan.
         s.input(&[0xB0, MIX, 127], &c);
-        assert_eq!(s.encoders, Encoders::Mix(Mix::Pan));
+        assert_eq!(s.mode, Mode::Mix(Mix::Pan));
     }
 
     #[test]
@@ -946,6 +762,75 @@ mod tests {
                 ..
             })
         ));
+    }
+
+    #[test]
+    fn scales_mode_sets_the_key_the_pads_play() {
+        let (c, mut rx) = controls();
+        let mut s = Surface::new();
+        let tap = |s: &mut Surface, cc: u8| {
+            s.input(&[0xB0, cc, 127], &c);
+            s.input(&[0xB0, cc, 0], &c);
+        };
+        tap(&mut s, SCALE);
+        assert_eq!(s.mode, Mode::Scales);
+        // Root C (second button over the screen), then Major (the previous
+        // scale from Minor), then the 3rd-up layout with the third encoder.
+        tap(&mut s, UPPER_FIRST + 1);
+        tap(&mut s, UPPER_FIRST);
+        s.input(&[0xB0, ENCODER_FIRST + 2, 6], &c);
+        s.input(&[0xB0, ENCODER_FIRST + 2, 6], &c);
+        let key = c.key();
+        assert_eq!(key.name(), "C Major");
+        assert_eq!(key.layout, crate::scale::Layout::ThirdUp);
+        let (upper, lower) = s.menus(&c).expect("menus");
+        assert!(upper[1].on && upper[1].label == "C");
+        assert_eq!(lower[7].label, "Chromatic");
+        // Bass in C major: bottom-left C1, a third up E1.
+        tap(&mut s, LOWER_FIRST + 7);
+        assert!(c.key().chromatic);
+        tap(&mut s, LOWER_FIRST + 7);
+        tap(&mut s, SCALE);
+        assert_eq!(s.mode, Mode::Device);
+        tap(&mut s, LOWER_FIRST + 1);
+        tap(&mut s, NOTE);
+        while rx.pop().is_ok() {}
+        s.input(&[0x90, 44, 90], &c);
+        assert!(matches!(
+            rx.pop(),
+            Ok(Command::Note {
+                track: 1,
+                pitch: 28,
+                ..
+            })
+        ));
+    }
+
+    #[test]
+    fn held_session_button_only_peeks() {
+        let (c, _rx) = controls();
+        let mut s = Surface::new();
+        s.input(&[0xB0, NOTE, 127], &c);
+        s.input(&[0xB0, NOTE, 0], &c);
+        assert_eq!(s.view, View::Note);
+        // Tapped: stays.
+        s.input(&[0xB0, SESSION, 127], &c);
+        s.input(&[0xB0, SESSION, 0], &c);
+        assert_eq!(s.view, View::Session);
+        s.input(&[0xB0, NOTE, 127], &c);
+        s.input(&[0xB0, NOTE, 0], &c);
+        // Held: back to Note on release.
+        s.input(&[0xB0, SESSION, 127], &c);
+        s.tick(Instant::now() + LONG_PRESS * 2, &c);
+        assert_eq!(s.view, View::Session);
+        s.input(&[0xB0, SESSION, 0], &c);
+        assert_eq!(s.view, View::Note);
+        // Scale held: a peek too.
+        s.input(&[0xB0, SCALE, 127], &c);
+        assert_eq!(s.mode, Mode::Scales);
+        s.tick(Instant::now() + LONG_PRESS * 2, &c);
+        s.input(&[0xB0, SCALE, 0], &c);
+        assert_eq!(s.mode, Mode::Device);
     }
 
     #[test]
@@ -1000,7 +885,7 @@ mod tests {
         s.input(&[0xB0, SHIFT, 0], &c);
         press(&mut s, NOTE);
         press(&mut s, NOTE);
-        assert_eq!(s.mode, Mode::Steps);
+        assert_eq!(s.view, View::Steps);
         assert!(!c.has_clip(3, 7));
         press(&mut s, SCENE_FIRST + 3);
         assert_eq!(s.layer, Layer::Gate);

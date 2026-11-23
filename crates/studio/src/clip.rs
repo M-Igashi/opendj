@@ -218,7 +218,7 @@ fn stages(name: &str, sound: Sound, rows: [(u8, u8); 8], tweak: impl Fn(&mut Sta
         stage.gates = gates;
     }
     tweak(&mut s);
-    s.clip(name, sound)
+    s.clip(name, sound, &crate::scale::Key::default())
 }
 
 /// Four tracks of eight scenes in A minor at 124 BPM: drums, bass, chords,

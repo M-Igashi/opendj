@@ -242,6 +242,7 @@ fn run(c: Arc<Controls>, stop: Arc<AtomicBool>, status: Status) {
                     let _ = k.output.send(&m);
                 }
             }
+            surface.tick(Instant::now(), &c);
             clock.tick(&c, &mut k.output);
             for m in surface.lights(&c) {
                 if k.output.send(&m).is_err() {

@@ -4,22 +4,10 @@
 //! into an ordinary note clip (plus lock points) for the audio thread.
 
 use crate::clip::{Clip, Lock, Note, Sound};
+use crate::scale::Key;
 use crate::sound::{DRUM_NOTES, PARAMS};
 
 pub const STAGES: usize = 8;
-
-/// A minor: the demo set's key.
-pub const SCALE: [u8; 7] = [0, 2, 3, 5, 7, 8, 10];
-pub const ROOT: u8 = 9;
-
-/// The note a melodic sound's lowest pad plays.
-pub fn home(sound: Sound) -> i32 {
-    match sound {
-        Sound::Bass => 33,
-        Sound::Pad => 45,
-        _ => 57,
-    }
-}
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Stage {
@@ -72,17 +60,13 @@ impl Stage {
         pulse < 8 && self.gates & (1 << pulse) != 0
     }
 
-    /// The MIDI note it plays on `sound`.
-    pub fn pitch(&self, sound: Sound) -> u8 {
+    /// The MIDI note it plays on `sound` in `key`.
+    pub fn pitch(&self, sound: Sound, key: &Key) -> u8 {
         if let Sound::Drums(_) = sound {
             return DRUM_NOTES[(self.degree as usize).min(7)];
         }
         let d = self.degree as i32;
-        let p = home(sound)
-            + 12 * self.octave as i32
-            + SCALE[(d % 7) as usize] as i32
-            + 12 * (d / 7)
-            + self.sharp as i32;
+        let p = key.home(sound) + 12 * self.octave as i32 + key.degree(d) + self.sharp as i32;
         p.clamp(0, 127) as u8
     }
 }
@@ -180,7 +164,7 @@ impl Default for Stages {
 impl Stages {
     /// The clip the audio thread plays: notes, a lock point at each stage
     /// when any stage has locks, and where each stage starts.
-    pub fn clip(&self, name: &str, sound: Sound) -> Clip {
+    pub fn clip(&self, name: &str, sound: Sound, key: &Key) -> Clip {
         let locked = self.stages.iter().any(Stage::has_locks);
         let mut notes = Vec::new();
         let mut locks = Vec::new();
@@ -202,7 +186,7 @@ impl Stages {
             let note = |start: f64, length: f64| Note {
                 start,
                 length,
-                pitch: s.pitch(sound),
+                pitch: s.pitch(sound, key),
                 velocity: s.velocity,
                 chance: s.chance,
             };
@@ -243,7 +227,7 @@ mod tests {
         press(&mut s.stages[1], Layer::Gate, 0, false, true);
         press(&mut s.stages[1], Layer::Pitch, 2, false, false);
         press(&mut s.stages[2], Layer::Chance, 0, false, false);
-        let c = s.clip("t", Sound::Bass);
+        let c = s.clip("t", Sound::Bass, &Key::default());
         // 2 + 4 + 0 (skipped) + 5 x 2 pulses of a sixteenth.
         assert_eq!(c.beats, 16.0 * 0.25);
         assert_eq!(c.notes.len(), 3);
@@ -263,7 +247,7 @@ mod tests {
         press(&mut s.stages[0], Layer::Gate, 2, true, false);
         assert_eq!((s.stages[0].pulses, s.stages[0].gates), (3, 0));
         s.stages[4].locks[0] = Some(0.9);
-        let c = s.clip("t", Sound::Lead);
+        let c = s.clip("t", Sound::Lead, &Key::default());
         // A lock point per stage, so the ones without locks go back.
         assert_eq!(c.locks.len(), STAGES);
         assert_eq!(c.locks[4].values[0], Some(0.9));
@@ -274,8 +258,8 @@ mod tests {
     fn drum_rows_are_sounds() {
         let mut st = Stage::default();
         press(&mut st, Layer::Pitch, 1, false, false);
-        assert_eq!(st.pitch(Sound::Drums("Punch")), 38);
+        assert_eq!(st.pitch(Sound::Drums("Punch"), &Key::default()), 38);
         press(&mut st, Layer::Octave, 4, false, false);
-        assert_eq!(st.pitch(Sound::Lead), 57 + 12 + 2);
+        assert_eq!(st.pitch(Sound::Lead, &Key::default()), 57 + 12 + 2);
     }
 }

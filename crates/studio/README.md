@@ -62,8 +62,8 @@ If Live is open, set Push's Control Surface to None in Live's preferences,
 or Live takes the lights back.
 
 - Pads: the clip grid (Session) or the selected instrument (Note: drum pads,
-  or a keyboard in A minor going up a fourth per row; Octave buttons shift
-  it).
+  or a keyboard in the set's key; Octave buttons shift it). Hold Session
+  or Note to peek at that view: it goes back when you let go.
 - Steps (press Note again, or Layout): the selected slot as a stage
   clip, one pad column per stage. The scene buttons pick what the pads
   set: Pitch (two neighbouring pads for the semitone between), Octave,
@@ -78,10 +78,19 @@ or Live takes the lights back.
   and sends across the tracks (Mix; press Mix again or use Page for the
   next control). The master encoder is the main volume, the tempo encoder
   the tempo; hold Shift for fine steps.
+- Scale (tap to open and close, hold to peek): the key the keyboard plays
+  and stage clips are written in. Over the screen: previous scale, the
+  roots C G D A E B, and the pad layout; under it: next scale, the roots
+  F Bb Eb Ab Db Gb, and Chromatic (every semitone, notes outside the scale
+  dark). The first four encoders turn scale (32 of them), root, layout
+  (4th up, 4th right, 3rd up, octave up, sequential) and in key or
+  chromatic.
 - Play starts and stops the transport; Quantize steps the launch quantise.
 
 `opendj-studio --push-preview push.png` draws what the screen shows.
-Code: `src/push/` (`surface.rs` for the controls and lights, `display.rs`
+Code: `src/push/` (`surface.rs` for the controls and lights, with
+`surface/view.rs` for what the pads do and `surface/mode.rs` for the
+encoders and the buttons by the screen; `display.rs`
 and `ui/push.slint` for the screen, drawn by Slint's software renderer),
-`src/steps.rs` for stage clips; the protocol is Ableton's Push 2 MIDI and Display
+`src/steps.rs` for stage clips, `src/scale.rs` for scales and layouts; the protocol is Ableton's Push 2 MIDI and Display
 Interface Manual.

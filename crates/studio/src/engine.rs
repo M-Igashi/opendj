@@ -1353,7 +1353,7 @@ mod tests {
         st.stages[1].locks[0] = Some(1.0);
         st.stages[2].chance = 0.0;
         let mut set = one_note_set();
-        set[0].slots[0] = Some(st.clip("Steps", set[0].sound));
+        set[0].slots[0] = Some(st.clip("Steps", set[0].sound, &crate::scale::Key::default()));
         let (mut studio, mut r) = Studio::new(&set, 48_000.0, 120.0);
         studio.engine.keep_log(256);
         r.commands.push(Command::Launch { track: 0, scene: 0 }).ok();

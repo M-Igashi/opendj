@@ -18,6 +18,7 @@ mod control;
 mod engine;
 mod link;
 mod push;
+mod scale;
 mod sound;
 mod steps;
 

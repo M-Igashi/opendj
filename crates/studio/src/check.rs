@@ -287,12 +287,12 @@ pub fn link() -> i32 {
 }
 
 /// Draws what Push 2's screen shows for the demo set, a clip playing on
-/// each track, into a PNG: with the instrument knobs, with the mixer, and
-/// in Steps mode holding a stage with a lock.
+/// each track, into a PNG: with the instrument knobs, with the mixer, in
+/// Scales mode, and in Steps mode holding a stage with a lock.
 pub fn push_preview(path: &str) -> i32 {
     use crate::control::{Controls, Mix};
     use crate::push::display::{self, HEIGHT, WIDTH};
-    use crate::push::surface::{Encoders, Surface, NOTE, PAD_FIRST};
+    use crate::push::surface::{Mode, Surface, NOTE, PAD_FIRST};
 
     let set = clip::demo_set();
     let (mut s, r) = Studio::new(&set, RATE, TEMPO);
@@ -325,12 +325,12 @@ pub fn push_preview(path: &str) -> i32 {
         }
         renderer.frame().rgb()
     };
-    for encoders in [Encoders::Device, Encoders::Mix(Mix::Volume)] {
-        surface.encoders = encoders;
+    for mode in [Mode::Device, Mode::Mix(Mix::Volume), Mode::Scales] {
+        surface.mode = mode;
         frames.push(settle(&mut renderer, &surface));
     }
     // Steps mode on the bass's stage clip, holding its locked stage.
-    surface.encoders = Encoders::Device;
+    surface.mode = Mode::Device;
     c.select(1, Some(0));
     for m in [
         [0xB0, NOTE, 127],
