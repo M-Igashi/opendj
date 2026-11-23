@@ -2643,7 +2643,7 @@ component PadTab inherits Rectangle {
     callback menu();
     property <bool> shift;
     height: 24px;
-    border-radius: 8px;
+    border-radius: Theme.pad-radius;
     border-width: 1px;
     border-color: on ? Theme.n-6e58a8 : ta.has-hover ? Theme.n-48484c : Theme.n-2c2c31;
     background: on ? Theme.lit-fill : ta.has-hover ? Theme.pill-hover : Theme.pill;
@@ -2705,8 +2705,9 @@ component PadTabs inherits Rectangle {
         MapMark { key: "script:deck " + root.deck-number + " set 'pad_tab' " + (first + i); }
     }
     panel-menu := PopupWindow {
-        x: clamp((root.width - grid-w) / 2 + mod(menu-tab, 4) * (cell-w + 5px), 0px, max(0px, root.width - 160px));
-        y: root.height;
+        // Centred under the tab it opened from.
+        x: clamp((root.width - grid-w) / 2 + mod(menu-tab, 4) * (cell-w + 5px) + cell-w / 2 - 80px, 0px, max(0px, root.width - 160px));
+        y: root.height + 2px;
         width: 160px;
         close-policy: close-on-click-outside;
         TitledList {
@@ -2718,10 +2719,11 @@ component PadTabs inherits Rectangle {
                     root.selected = menu-tab;
                     panel-menu.close();
                 }
+                // The tab's page in white on its tint; lilac under the pointer.
                 Text {
                     x: 10px;
                     text: name;
-                    color: slots[menu-tab] == p ? Theme.lilac-text : Theme.text;
+                    color: parent.hovered ? Theme.lilac-text : Theme.text;
                     font-size: 12px;
                     vertical-alignment: center;
                 }
@@ -2955,13 +2957,13 @@ export component Pads inherits HorizontalLayout {
                             group: group;
                             number: row * 4 + i + 1;
                             tint: Theme.hotcues[row * 4 + i];
-                            horizontal-stretch: 1; min-width: 0px; preferred-width: 0px; max-width: grid.cell-w; max-height: grid.cell; border-radius: 7px; border-width: 1px; border-color: Theme.n-2c2c31;
+                            horizontal-stretch: 1; min-width: 0px; preferred-width: 0px; max-width: grid.cell-w; max-height: grid.cell; border-radius: Theme.pad-radius; border-width: 1px; border-color: Theme.n-2c2c31;
                         }
                     }
                     if page == 1: HorizontalLayout {
                         spacing: grid.gap;
                         horizontal-stretch: 1;
-                        for i in 4: PadFxButton { deck: deck; fx: pad-fx[row * 4 + i]; tint: tint; horizontal-stretch: 1; min-width: 0px; preferred-width: 0px; max-width: grid.cell-w; max-height: grid.cell; border-radius: 7px; border-width: 1px; border-color: Theme.n-2c2c31; }
+                        for i in 4: PadFxButton { deck: deck; fx: pad-fx[row * 4 + i]; tint: tint; horizontal-stretch: 1; min-width: 0px; preferred-width: 0px; max-width: grid.cell-w; max-height: grid.cell; border-radius: Theme.pad-radius; border-width: 1px; border-color: Theme.n-2c2c31; }
                     }
                     if page == 2: HorizontalLayout {
                         spacing: grid.gap;
@@ -2975,7 +2977,7 @@ export component Pads inherits HorizontalLayout {
                             text: (mod(i, 2) == 0 ? "−" : "+") + size;
                             detail: size == 1 ? "beat" : "beats";
                             tint: tint;
-                            horizontal-stretch: 1; min-width: 0px; preferred-width: 0px; max-width: grid.cell-w; max-height: grid.cell; border-radius: 7px; border-width: 1px; border-color: Theme.n-2c2c31;
+                            horizontal-stretch: 1; min-width: 0px; preferred-width: 0px; max-width: grid.cell-w; max-height: grid.cell; border-radius: Theme.pad-radius; border-width: 1px; border-color: Theme.n-2c2c31;
                         }
                     }
                     if page == 5 || page == 9: HorizontalLayout {
@@ -2989,7 +2991,7 @@ export component Pads inherits HorizontalLayout {
                             // 1/16 to 1 is a beat or less.
                             detail: (page == 5 ? row == 0 && i < 3 : row == 0 || i == 0) ? "beat" : "beats";
                             tint: tint;
-                            horizontal-stretch: 1; min-width: 0px; preferred-width: 0px; max-width: grid.cell-w; max-height: grid.cell; border-radius: 7px; border-width: 1px; border-color: Theme.n-2c2c31;
+                            horizontal-stretch: 1; min-width: 0px; preferred-width: 0px; max-width: grid.cell-w; max-height: grid.cell; border-radius: Theme.pad-radius; border-width: 1px; border-color: Theme.n-2c2c31;
                         }
                     }
                     // SLICER: the section's 8 beats, lit while each plays.
@@ -3004,13 +3006,13 @@ export component Pads inherits HorizontalLayout {
                             text: page == 10 ? "" + (row * 4 + i + 1) : (row * 4 + i + 1) + "/8";
                             detail: page == 10 ? "slice" : "beat";
                             tint: tint;
-                            horizontal-stretch: 1; min-width: 0px; preferred-width: 0px; max-width: grid.cell-w; max-height: grid.cell; border-radius: 7px; border-width: 1px; border-color: Theme.n-2c2c31;
+                            horizontal-stretch: 1; min-width: 0px; preferred-width: 0px; max-width: grid.cell-w; max-height: grid.cell; border-radius: Theme.pad-radius; border-width: 1px; border-color: Theme.n-2c2c31;
                         }
                     }
                     if page == 6: HorizontalLayout {
                         spacing: grid.gap;
                         horizontal-stretch: 1;
-                        for i in 4: PadFxButton { deck: deck; fx: pad-fx2[row * 4 + i]; tint: tint; horizontal-stretch: 1; min-width: 0px; preferred-width: 0px; max-width: grid.cell-w; max-height: grid.cell; border-radius: 7px; border-width: 1px; border-color: Theme.n-2c2c31; }
+                        for i in 4: PadFxButton { deck: deck; fx: pad-fx2[row * 4 + i]; tint: tint; horizontal-stretch: 1; min-width: 0px; preferred-width: 0px; max-width: grid.cell-w; max-height: grid.cell; border-radius: Theme.pad-radius; border-width: 1px; border-color: Theme.n-2c2c31; }
                     }
                     if page == 7 || page == 8: HorizontalLayout {
                         spacing: grid.gap;
@@ -3022,7 +3024,7 @@ export component Pads inherits HorizontalLayout {
                             semitones: page == 7 ? keyboard-semitones[row * 4 + i] : key-shift[row * 4 + i];
                             step: key-steps[row * 4 + i];
                             tint: page == 7 ? keyboard-tint : tint;
-                            horizontal-stretch: 1; min-width: 0px; preferred-width: 0px; max-width: grid.cell-w; max-height: grid.cell; border-radius: 7px; border-width: 1px; border-color: Theme.n-2c2c31;
+                            horizontal-stretch: 1; min-width: 0px; preferred-width: 0px; max-width: grid.cell-w; max-height: grid.cell; border-radius: Theme.pad-radius; border-width: 1px; border-color: Theme.n-2c2c31;
                         }
                     }
                     if page == 4: HorizontalLayout {
@@ -3037,7 +3039,7 @@ export component Pads inherits HorizontalLayout {
                             // The track's own color for a stem, else VirtualDJ's.
                             tint: stem-pads[row * 4 + i].stem > 0 && stem-pads[row * 4 + i].stem <= info.stem-colors.length
                                 ? info.stem-colors[stem-pads[row * 4 + i].stem - 1] : stem-pads[row * 4 + i].tint;
-                            horizontal-stretch: 1; min-width: 0px; preferred-width: 0px; max-width: grid.cell-w; max-height: grid.cell; border-radius: 7px; border-width: 1px; border-color: Theme.n-2c2c31;
+                            horizontal-stretch: 1; min-width: 0px; preferred-width: 0px; max-width: grid.cell-w; max-height: grid.cell; border-radius: Theme.pad-radius; border-width: 1px; border-color: Theme.n-2c2c31;
                         }
                     }
                     Rectangle { horizontal-stretch: 0.001; }
@@ -3053,22 +3055,32 @@ export component Pads inherits HorizontalLayout {
         if bar || has-setting: Rectangle {
             height: bar ? 42px : 28px;
             property <length> gw: min(self.width, 4 * 120px + 15px);
+            // The loop: IN, OUT, then the auto loop's length (a press loops
+            // that many beats). Centred under the middle pads where they
+            // have room, else as far left as the page's setting needs.
+            property <length> loop-w: 40px + 40px + 84px + 2 * 6px;
+            if bar: HorizontalLayout {
+                x: (parent.width - parent.gw) / 2 + max(0px, min((parent.gw - parent.loop-w) / 2, parent.gw - setting.preferred-width - 8px - parent.loop-w));
+                y: 5px;
+                width: parent.loop-w;
+                height: 32px;
+                spacing: 6px;
+                // A loop of any length: IN on the nearest beat lights grey while the
+                // waveform marks the loop out; OUT closes it, and it turns lilac.
+                ControlButton { group: group; key: "loop_in"; light-key: "loop_in_pending"; text: "IN"; momentary: true; tint: Theme.n-d1d1d6; font-size: 11px; width: 40px; tour-id: group + ",loop_in"; }
+                ControlButton { group: group; key: "loop_out"; light-key: "loop_enabled"; text: "OUT"; momentary: true; tint: Theme.lilac; font-size: 11px; width: 40px; tour-id: group + ",loop_out"; }
+                LoopStepper { group: group; info: info; width: 84px; }
+            }
+            // The open page's setting, at the pads' right edge.
             HorizontalLayout {
                 x: (parent.width - parent.gw) / 2;
                 y: bar ? 5px : 4px;
                 width: parent.gw;
                 height: bar ? 32px : 24px;
-                spacing: 6px;
-                // A loop of any length: IN on the nearest beat lights grey while the
-                // waveform marks the loop out; OUT closes it, and it turns lilac.
-                if bar: ControlButton { group: group; key: "loop_in"; light-key: "loop_in_pending"; text: "IN"; momentary: true; tint: Theme.n-d1d1d6; font-size: 11px; width: 40px; tour-id: group + ",loop_in"; }
-                if bar: ControlButton { group: group; key: "loop_out"; light-key: "loop_enabled"; text: "OUT"; momentary: true; tint: Theme.lilac; font-size: 11px; width: 40px; tour-id: group + ",loop_out"; }
-                // Then the auto loop: its length, and a press loops that many beats.
-                if bar: LoopStepper { group: group; info: info; width: 84px; }
-                Rectangle { horizontal-stretch: 1; }
+                alignment: end;
                 VerticalLayout {
                     alignment: center;
-                    HorizontalLayout {
+                    setting := HorizontalLayout {
                         spacing: 4px;
                         // Hot Cues: cues set on the beat.
                         if page == 0: SwitchPill {
