@@ -389,6 +389,35 @@ impl Deck {
         self.last_written_position = self.c.playposition.get();
     }
 
+    /// Moves the play position to `seconds` for a jump (a hot cue, the
+    /// cue point, a seek): a jump out of an active loop ends it, as in
+    /// Mixxx, rather than the loop pulling the playhead back in.
+    fn seek(&mut self, seconds: f64) {
+        self.set_seconds(seconds);
+        if self.c.loop_enabled.get_bool() && self.loop_end > self.loop_start {
+            let at = self.seconds();
+            if at < self.loop_start - 1e-6 || at >= self.loop_end {
+                self.c.loop_enabled.set_bool(false);
+            }
+        }
+    }
+
+    /// Whether the loop from `start` to `end` is the one playing.
+    fn is_playing_loop(&self, start: f64, end: f64) -> bool {
+        self.c.loop_enabled.get_bool()
+            && (self.loop_start - start).abs() < 1e-3
+            && (self.loop_end - end).abs() < 1e-3
+    }
+
+    /// Whether a hot cue pad holds the loop that is playing.
+    fn loop_on_a_pad(&self) -> bool {
+        self.c.hotcues.iter().any(|hc| {
+            hc.enabled.get_bool()
+                && hc.kind.get() == HOTCUE_LOOP
+                && self.is_playing_loop(hc.position.get(), hc.end_position.get())
+        })
+    }
+
     fn speed(&self) -> f64 {
         self.sync_speed
             .unwrap_or_else(|| 1.0 + self.c.rate.get() * self.c.rate_range.get() * self.rate_dir())
@@ -599,7 +628,7 @@ impl Deck {
         // Seeks from the UI (e.g. clicking the overview) arrive as playposition changes.
         let p = self.c.playposition.get();
         if (p - self.last_written_position).abs() > 1e-9 {
-            self.set_seconds(p * track.duration);
+            self.seek(p * track.duration);
             // A seek while slipping takes the silent playhead along.
             if self.slip.is_some() {
                 self.slip = Some(self.pos);
@@ -635,7 +664,7 @@ impl Deck {
             if playing {
                 self.c.play.set_bool(false);
                 let cue = self.c.cue_point.get();
-                self.set_seconds(cue);
+                self.seek(cue);
             } else {
                 self.c.cue_point.set(self.seconds());
                 if self.c.cue_mode.get() != 3.0 {
@@ -652,14 +681,14 @@ impl Deck {
                 self.previewing = None;
                 self.c.play.set_bool(false);
                 let cue = self.c.cue_point.get();
-                self.set_seconds(cue);
+                self.seek(cue);
             }
         }
         if self.cup_edge.pressed(&self.c.cue_play) {
             if playing {
                 self.c.play.set_bool(false);
                 let cue = self.c.cue_point.get();
-                self.set_seconds(cue);
+                self.seek(cue);
             } else {
                 self.c.cue_point.set(self.seconds());
             }
@@ -687,11 +716,7 @@ impl Deck {
             if activate {
                 match saved_loop {
                     // Pressing the loop that is playing turns it off, as in Mixxx.
-                    Some(end)
-                        if self.c.loop_enabled.get_bool()
-                            && (self.loop_start - position).abs() < 1e-3
-                            && (self.loop_end - end).abs() < 1e-3 =>
-                    {
+                    Some(end) if self.is_playing_loop(position, end) => {
                         self.c.loop_enabled.set_bool(false)
                     }
                     Some(end) => {
@@ -710,15 +735,21 @@ impl Deck {
                         if playing && self.c.slip_enabled.get_bool() {
                             self.slip_cue = Some(h);
                         }
-                        self.set_seconds(position);
+                        self.seek(position);
                         // A paused deck jumps there and plays, as on
                         // Pioneer gear and as the pads' guide says.
                         self.c.play.set_bool(true);
                     }
                     None => {
+                        // An empty pad pressed while a loop plays saves the
+                        // loop, unless another pad holds it already: then
+                        // it sets a cue, so one loop doesn't fill the pads.
+                        let saved = self.loop_on_a_pad();
                         let hc = &self.c.hotcues[h];
-                        // An empty pad pressed while a loop plays saves the loop.
-                        if self.c.loop_enabled.get_bool() && self.loop_end > self.loop_start {
+                        if self.c.loop_enabled.get_bool()
+                            && self.loop_end > self.loop_start
+                            && !saved
+                        {
                             hc.position.set(self.loop_start.max(0.0));
                             hc.end_position.set(self.loop_end);
                             hc.kind.set(HOTCUE_LOOP);
@@ -738,11 +769,17 @@ impl Deck {
                 }
             }
             if set && (goto_play || goto_stop) {
-                self.set_seconds(position);
+                self.seek(position);
                 self.c.play.set_bool(goto_play);
             }
             let hc = &self.c.hotcues[h];
             if clear {
+                // Deleting the pad of the loop that is playing ends the
+                // loop too, so the pad then sets a cue rather than saving
+                // the same loop again.
+                if saved_loop.is_some_and(|end| self.is_playing_loop(position, end)) {
+                    self.c.loop_enabled.set_bool(false);
+                }
                 hc.enabled.set_bool(false);
                 hc.kind.set(0.0);
                 hc.end_position.set(-1.0);
@@ -889,15 +926,15 @@ impl Deck {
                     self.c.rate.set(self.c.rate.get() + step / range);
                 }
                 Action::Start(play) => {
-                    self.set_seconds(0.0);
+                    self.seek(0.0);
                     if let Some(play) = play {
                         self.c.play.set_bool(play);
                     }
                 }
-                Action::End => self.set_seconds(track.duration),
+                Action::End => self.seek(track.duration),
                 Action::CueGoto(play) => {
                     let cue = self.c.cue_point.get();
-                    self.set_seconds(cue);
+                    self.seek(cue);
                     self.c.play.set_bool(play);
                 }
                 Action::Grid(edit) => self.grid_edit = Some((edit, now)),
@@ -941,7 +978,7 @@ impl Deck {
                         }
                         None => self.c.cue_point.get(),
                     };
-                    self.set_seconds(at);
+                    self.seek(at);
                     self.c.play.set_bool(true);
                 }
             }
@@ -6477,6 +6514,86 @@ mod tests {
         assert_eq!(c("hotcue_5_type").get(), HOTCUE_LOOP);
         assert_eq!(c("hotcue_5_endposition").get(), 4.0);
         press("hotcue_5_activate");
+        run(&mut engine, 0.02);
+        assert!(c("loop_enabled").get_bool());
+    }
+
+    #[test]
+    fn a_hot_cue_outside_the_loop_ends_it() {
+        let (reg, mut engine, mut input) = setup();
+        load(&mut input, 0, short_track(120.0, 10.0));
+        run(&mut engine, 0.02);
+        let c = |k: &str| reg.get("[Channel1]", k).unwrap();
+        let press = |k: &str| {
+            c(k).set_bool(true);
+            c(k).set_bool(false);
+        };
+        // A cue at 6 s, then a 4-beat loop near the start.
+        c("hotcue_1_position").set(6.0);
+        c("hotcue_1_enabled").set_bool(true);
+        c("hotcue_1_type").set(HOTCUE_CUE);
+        c("play").set_bool(true);
+        run(&mut engine, 0.5);
+        press("beatloop_4_activate");
+        run(&mut engine, 0.02);
+        assert!(c("loop_enabled").get_bool());
+
+        // Jumping to the cue leaves the loop and plays on from the cue.
+        press("hotcue_1_activate");
+        run(&mut engine, 0.1);
+        assert!(!c("loop_enabled").get_bool());
+        let at = engine.decks[0].seconds();
+        assert!((6.0..6.5).contains(&at), "at {at}");
+
+        // A cue inside the loop keeps it.
+        press("beatloop_4_activate");
+        run(&mut engine, 0.02);
+        let start = engine.decks[0].loop_start;
+        c("hotcue_2_position").set(start + 0.1);
+        c("hotcue_2_enabled").set_bool(true);
+        c("hotcue_2_type").set(HOTCUE_CUE);
+        press("hotcue_2_activate");
+        run(&mut engine, 0.02);
+        assert!(c("loop_enabled").get_bool());
+    }
+
+    #[test]
+    fn deleting_the_playing_loops_pad_ends_the_loop() {
+        let (reg, mut engine, mut input) = setup();
+        load(&mut input, 0, short_track(120.0, 10.0));
+        run(&mut engine, 0.02);
+        let c = |k: &str| reg.get("[Channel1]", k).unwrap();
+        let press = |k: &str| {
+            c(k).set_bool(true);
+            c(k).set_bool(false);
+        };
+        c("play").set_bool(true);
+        run(&mut engine, 0.5);
+        press("beatloop_4_activate");
+        run(&mut engine, 0.02);
+        press("hotcue_1_activate");
+        run(&mut engine, 0.02);
+        assert_eq!(c("hotcue_1_type").get(), HOTCUE_LOOP);
+
+        // A second empty pad sets a cue: the loop is on pad 1 already.
+        press("hotcue_2_activate");
+        run(&mut engine, 0.02);
+        assert_eq!(c("hotcue_2_type").get(), HOTCUE_CUE);
+        assert!(c("loop_enabled").get_bool());
+
+        // Deleting pad 1 ends its loop; pressing it again sets a cue.
+        press("hotcue_1_clear");
+        run(&mut engine, 0.02);
+        assert!(!c("hotcue_1_enabled").get_bool());
+        assert!(!c("loop_enabled").get_bool());
+        press("hotcue_1_activate");
+        run(&mut engine, 0.02);
+        assert_eq!(c("hotcue_1_type").get(), HOTCUE_CUE);
+
+        // Deleting a cue pad leaves a playing loop alone.
+        press("beatloop_4_activate");
+        run(&mut engine, 0.02);
+        press("hotcue_2_clear");
         run(&mut engine, 0.02);
         assert!(c("loop_enabled").get_bool());
     }
