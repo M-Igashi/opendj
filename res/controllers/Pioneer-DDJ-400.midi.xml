@@ -36,7 +36,7 @@
                 </options>
             </control>
             <control>
-              <description>BROWSE +SHIFT - press - Navigate left to parent or sources</description>
+              <description>BROWSE +SHIFT - press - Back to the sources from the folders, or to the folders from the tracks</description>
                 <group>[Library]</group>
                 <key>MoveFocusBackward</key>
                 <status>0x96</status>

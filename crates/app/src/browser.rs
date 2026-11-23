@@ -4901,7 +4901,15 @@ impl Browser {
             }
         }
         for _ in 0..backward.max(0) {
-            self.navigate_browser(2, 1);
+            // A Shift+press steps left, as ← does, except in the folders:
+            // there it goes straight to the rail instead of up one folder at
+            // a time, since turning the knob already reaches the parents.
+            let focus = app.global::<BrowserFocus>();
+            if focus.get_pane() == BrowserPane::Folders {
+                focus.invoke_focus(BrowserPane::Sources);
+            } else {
+                self.navigate_browser(2, 1);
+            }
         }
         for _ in 0..relative.saturating_abs() {
             self.navigate_browser(if relative > 0 { 3 } else { 2 }, 1);
