@@ -11,12 +11,27 @@ cargo run --release -p opendj-studio                    # the window
 cargo run --release -p opendj-studio -- --check         # launch timing, CPU, allocations
 cargo run --release -p opendj-studio -- --render a.wav  # 32 bars through the scenes
 cargo run --release -p opendj-studio -- --link-check    # joins a Link session, checks a launch lands on its bar
+cargo run --release -p opendj-studio -- path/to/set.als # opens an Ableton Live set
+cargo run --release -p opendj-studio -- --als-info set.als # prints what a set holds
 ```
 
 Click a clip to launch it on the next bar (the **Launch** pill switches
 between 1 Bar, 1/4 and None); **▶ N** launches a whole scene and stops
 tracks with an empty slot in it; **■** stops a track on the next bar. Turn
 on **LINK** with openDJ's Link on, and launches land on the bars of the mix.
+
+## Ableton Live sets
+
+Give a Live set's `.als` on the command line to open it. Audio and MIDI
+tracks come in with their names, colours, volume and pan, plus the first
+eight scenes of Session clips. Audio clips play their recordings (found
+next to the set, as Live saves them) following their warp markers at the
+studio's tempo, keeping their key. Live devices and plug-ins are listed in
+each track's device row; until plug-ins are hosted, MIDI tracks play a
+built-in stand-in (a drum kit for Drum Racks). The Arrangement, group
+tracks, live inputs and effects aren't brought in yet; the status line says
+so. Push shows eight tracks at a time: Left and Right move the selection,
+Shift with them jumps by eight.
 
 ## How it's built
 
@@ -31,6 +46,7 @@ on **LINK** with openDJ's Link on, and launches land on the bars of the mix.
 - `link.rs`: Ableton Link, quantum 4 as in openDJ.
 - `sound.rs`: the built-in drum kit and synth; fixed voice arrays.
 - `audio.rs`: the sound card through cpal, or a timer when there is none.
+- `als.rs`: reading Live sets (gzipped XML) into tracks and clips.
 - `check.rs`: the offline checks, with a counting allocator.
 
 The design follows a review of Suhina, transit, maolan and Ardour

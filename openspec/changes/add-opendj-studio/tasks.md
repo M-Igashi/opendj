@@ -22,6 +22,8 @@
 - [ ] 2.8 Try the Slint-drawn Push screen on hardware (macOS)
 - [x] 2.9 Steps pad mode on Push: stage clips (pitch, octave, velocity, gate, chance, lock amount) with parameter locks
 - [ ] 2.10 Try Steps mode on hardware (macOS)
+- [x] 2.11 Open an Ableton Live set (.als): tracks with colours, volume and pan, return names, MIDI clips, audio clips following their warp markers (key kept), device lists shown; Push pages tracks in banks of 8
+- [ ] 2.12 Open a real Live set with its recordings on hardware (macOS)
 
 ## 3. Clip editing
 

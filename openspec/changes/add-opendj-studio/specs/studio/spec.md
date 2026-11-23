@@ -42,3 +42,14 @@ openDJ Studio SHALL offer a Steps pad mode on Push 2 that edits the selected slo
 #### Scenario: Locking a knob on a stage
 - **WHEN** a stage clip plays and stage 6's pad is held while the first encoder turns right
 - **THEN** the cutoff opens on stage 6 only, Push's screen shows the locked value in white, and the other stages keep the track's cutoff
+
+### Requirement: Opening Ableton Live sets
+openDJ Studio SHALL open an Ableton Live set (`.als`, gzipped or plain XML) given on the command line. It SHALL bring in every audio and MIDI track (up to 16) with its name, colour, volume and pan, the first eight scenes of Session clips, and the return tracks' names. MIDI clips SHALL keep their notes, loop and note chance. Audio clips SHALL play their recording following its warp markers at the studio's tempo, keeping its key; a recording that can't be found SHALL leave the clip silent and be counted in the window's status line. Live devices and plug-ins SHALL be listed on each track; MIDI tracks SHALL play a built-in stand-in sound until plug-ins are hosted. Parts not brought in (the Arrangement, group tracks, extra scenes) SHALL be named in the status line and printed.
+
+#### Scenario: A recording made at another tempo
+- **WHEN** a set at 99.45 BPM holds an audio clip recorded at 120 BPM with two warp markers, and the clip is launched
+- **THEN** the recording plays in time with the studio's clock at 99.45 BPM, in its own key
+
+#### Scenario: More than eight tracks on Push
+- **WHEN** a 12-track set is open and the ninth track is selected
+- **THEN** Push's pads, track buttons, encoders and screen show tracks 9 to 12

@@ -178,6 +178,8 @@ fn run(c: Arc<Controls>, stop: Arc<AtomicBool>, status: Status) {
     let colors: Vec<u32> = c.tracks.iter().map(|t| t.color).collect();
     let mut surface = Surface::new();
     let mut conn: Option<Connection> = None;
+    // The eight tracks whose colours the palette holds.
+    let mut bank = 0;
     let mut screen: Option<display::Screen> = None;
     let mut clock = ClockOut::new();
     let mut last_try = Instant::now() - Duration::from_secs(10);
@@ -198,7 +200,8 @@ fn run(c: Arc<Controls>, stop: Arc<AtomicBool>, status: Status) {
             if let Some(mut found) = connect() {
                 let _ = found.output.send(&surface::user_mode());
                 std::thread::sleep(Duration::from_millis(20));
-                for m in surface::palette(&colors) {
+                bank = surface::bank(&c);
+                for m in surface::palette(&colors[bank.min(colors.len())..]) {
                     let _ = found.output.send(&m);
                     std::thread::sleep(Duration::from_millis(2));
                 }
@@ -230,6 +233,13 @@ fn run(c: Arc<Controls>, stop: Arc<AtomicBool>, status: Status) {
                         lost = true;
                         break;
                     }
+                }
+            }
+            if surface::bank(&c) != bank {
+                // Another eight tracks: their colours into the palette.
+                bank = surface::bank(&c);
+                for m in surface::palette(&colors[bank.min(colors.len())..]) {
+                    let _ = k.output.send(&m);
                 }
             }
             clock.tick(&c, &mut k.output);

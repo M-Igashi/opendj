@@ -25,6 +25,9 @@ slint = { version = "=1.18.1", features = ["renderer-software"] }
 # from source, so nothing to install), drawn by Slint's software renderer.
 midir = "0.11"
 rusb = { version = "0.9", features = ["vendored"] }
+# Reading Ableton Live sets (.als: gzipped XML).
+flate2 = "1"
+roxmltree = "0.21"
 # The Push screen preview (`--push-preview`).
 png = "0.18"
 

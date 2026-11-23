@@ -190,6 +190,7 @@ impl Renderer {
             .tracks
             .iter()
             .enumerate()
+            .skip(super::surface::bank(c))
             .take(8)
             .map(|(t, info)| PushTrack {
                 name: info.name.as_str().into(),
@@ -250,6 +251,7 @@ impl Renderer {
                     .tracks
                     .iter()
                     .enumerate()
+                    .skip(super::surface::bank(c))
                     .take(8)
                     .map(|(t, info)| {
                         let x = c.mix(t, mix);

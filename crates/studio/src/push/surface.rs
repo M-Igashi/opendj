@@ -90,7 +90,14 @@ const W_ON: u8 = 127;
 const PULSE_QUARTER: u8 = 9;
 const BLINK_EIGHTH: u8 = 13;
 
+/// The first track of the eight the pads and buttons show: the bank
+/// holding the selected track.
+pub fn bank(c: &Controls) -> usize {
+    c.selected_track() / 8 * 8
+}
+
 /// SysEx messages writing this surface's palette, then reapplying it.
+/// `track_colors` starts at the bank's first track.
 pub fn palette(track_colors: &[u32]) -> Vec<Vec<u8>> {
     let rgb = |c: u32| ((c >> 16) as u8, (c >> 8) as u8, c as u8);
     let scale = |(r, g, b): (u8, u8, u8), k: f32| {
@@ -297,7 +304,7 @@ impl Surface {
                 if velocity == 0 {
                     return;
                 }
-                let (track, scene) = (col, 7 - row);
+                let (track, scene) = (bank(c) + col, 7 - row);
                 if track >= c.tracks.len() || scene >= SCENES {
                     return;
                 }
@@ -435,11 +442,12 @@ impl Surface {
                 }
             }
             LEFT | RIGHT => {
-                let t = c.selected_track();
+                // With Shift: the next eight tracks.
+                let (t, by) = (c.selected_track(), if self.shift { 8 } else { 1 });
                 let next = if cc == RIGHT {
-                    (t + 1).min(tracks.saturating_sub(1))
+                    (t + by).min(tracks.saturating_sub(1))
                 } else {
-                    t.saturating_sub(1)
+                    t.saturating_sub(by)
                 };
                 self.set_track(next, c);
             }
@@ -469,13 +477,13 @@ impl Surface {
                 }
             }
             cc if (LOWER_FIRST..LOWER_FIRST + 8).contains(&cc) => {
-                let t = (cc - LOWER_FIRST) as usize;
+                let t = bank(c) + (cc - LOWER_FIRST) as usize;
                 if t < tracks {
                     self.set_track(t, c);
                 }
             }
             cc if (UPPER_FIRST..UPPER_FIRST + 8).contains(&cc) => {
-                let t = (cc - UPPER_FIRST) as usize;
+                let t = bank(c) + (cc - UPPER_FIRST) as usize;
                 if t < tracks {
                     c.stop(t);
                 }
@@ -539,8 +547,9 @@ impl Surface {
                         }
                     }
                     Encoders::Mix(m) => {
-                        if i < c.tracks.len() {
-                            c.set_mix(i, m, c.mix(i, m) + step);
+                        let t = bank(c) + i;
+                        if t < c.tracks.len() {
+                            c.set_mix(t, m, c.mix(t, m) + step);
                         }
                     }
                 }
@@ -581,7 +590,7 @@ impl Surface {
         let m = &c.monitor;
         match self.mode {
             Mode::Session => {
-                let (t, s) = (col, 7 - row);
+                let (t, s) = (bank(c) + col, 7 - row);
                 if t >= c.tracks.len() {
                     return Led::OFF;
                 }
@@ -657,7 +666,7 @@ impl Surface {
             v.push((SCENE_FIRST + s as u8, led));
         }
         let selected = c.selected_track();
-        for t in 0..8 {
+        for t in bank(c)..bank(c) + 8 {
             let lower = if t >= tracks {
                 Led::OFF
             } else if t == selected {
@@ -665,7 +674,7 @@ impl Surface {
             } else {
                 Led::solid(track_dim(t))
             };
-            v.push((LOWER_FIRST + t as u8, lower));
+            v.push((LOWER_FIRST + (t % 8) as u8, lower));
             let playing = t < tracks && m.progress(t) >= 0.0;
             let upper = if !playing {
                 Led::OFF
@@ -674,7 +683,7 @@ impl Surface {
             } else {
                 Led::solid(RED_DIM)
             };
-            v.push((UPPER_FIRST + t as u8, upper));
+            v.push((UPPER_FIRST + (t % 8) as u8, upper));
         }
         v.push((SESSION, white(self.mode == Mode::Session)));
         v.push((NOTE, white(matches!(self.mode, Mode::Note | Mode::Steps))));

@@ -43,6 +43,13 @@ export struct ParamData {
     text: string,
 }
 
+// A device a set lists, shown until it can load.
+export struct DeviceData {
+    name: string,
+    kind: string,
+    note: string,
+}
+
 export struct TrackData {
     name: string,
     color: color,
@@ -53,6 +60,13 @@ export struct TrackData {
     // The instrument on the track, as the device row titles it.
     device: string,
     drums: bool,
+    // An audio track: recordings, no instrument.
+    audio: bool,
+    kind: string,
+    // Where it listens (an audio input, or a MIDI controller).
+    input: string,
+    // The devices a set lists for it.
+    chain: [DeviceData],
     // Meter, 0..1 on a dB scale.
     level: float,
     // Fader position 0..1 (0 dB at 60/66) and as text.
@@ -931,6 +945,10 @@ export component AppWindow inherits Window {
     in property <int> selected-track: 0;
     in property <int> selected-scene: -1;
     in property <float> main-volume: 60 / 66;
+    in property <string> return-a: "A Return";
+    in property <string> return-b: "B Return";
+    in property <color> return-a-color: Theme.return-a;
+    in property <color> return-b-color: Theme.return-b;
 
     callback launch-clip(int, int);   // track, scene
     callback launch-scene(int);
@@ -1029,7 +1047,13 @@ export component AppWindow inherits Window {
                     property <length> mixer-y: self.height - mixer;
                     property <length> tracks-end: tracks.length * (col-w + gap);
 
-                    // Tracks.
+                    // Tracks, scrolling sideways when there are more than fit.
+                    Flickable {
+                    x: 0;
+                    y: 0;
+                    width: session.ret-x - session.gap;
+                    height: session.height;
+                    content-width: max(self.width, session.tracks-end + 160px);
                     for t[i] in tracks: Rectangle {
                         x: i * (session.col-w + session.gap);
                         width: session.col-w;
@@ -1053,7 +1077,7 @@ export component AppWindow inherits Window {
                                     overflow: elide;
                                     horizontal-stretch: 1;
                                 }
-                                Text { text: "MIDI"; color: #10111299; font-size: 9px; font-weight: 700; vertical-alignment: center; }
+                                Text { text: t.kind; color: #10111299; font-size: 9px; font-weight: 700; vertical-alignment: center; }
                             }
                             TouchArea { clicked => { root.select(i, selected-scene); } }
                         }
@@ -1135,10 +1159,12 @@ export component AppWindow inherits Window {
                         }
                     }
 
+                    }
+
                     // Returns A and B.
                     for r[i] in [
-                        { name: "A Return", color: Theme.return-a, letter: "A" },
-                        { name: "B Return", color: Theme.return-b, letter: "B" },
+                        { name: root.return-a, color: root.return-a-color, letter: "A" },
+                        { name: root.return-b, color: root.return-b-color, letter: "B" },
                     ]: Rectangle {
                         x: session.ret-x + i * (session.ret + session.gap);
                         width: session.ret;
@@ -1259,6 +1285,18 @@ export component AppWindow inherits Window {
                             has-clip: root.has-clip;
                             data: root.has-clip ? slots[selected-scene * tracks.length + selected-track] : { name: "", beats: 0 };
                         }
+                        if track.audio: Device {
+                            width: 180px;
+                            title: "Audio In";
+                            tint: track.color;
+                            selected: true;
+                            VerticalLayout {
+                                padding: 10px;
+                                spacing: 6px;
+                                Text { text: track.input == "" ? "No input" : track.input; color: Theme.text; font-size: 13px; font-weight: 600; }
+                                Text { text: "Recordings play from the clips. Live input and monitoring come next."; color: Theme.dim; font-size: 11px; wrap: word-wrap; }
+                            }
+                        }
                         if track.drums: Device {
                             width: 480px;
                             title: track.device;
@@ -1297,7 +1335,7 @@ export component AppWindow inherits Window {
                                 }
                             }
                         }
-                        if !track.drums: Device {
+                        if !track.drums && !track.audio: Device {
                             width: 300px;
                             title: track.device;
                             tint: track.color;
@@ -1312,7 +1350,19 @@ export component AppWindow inherits Window {
                                 }
                             }
                         }
-                        Device {
+                        // A set's own devices, until they can load.
+                        for d in track.chain: Device {
+                            width: 150px;
+                            title: d.name;
+                            tint: d.kind == "Live" ? Theme.faint : Theme.effect;
+                            VerticalLayout {
+                                padding: 10px;
+                                spacing: 6px;
+                                Text { text: d.kind; color: Theme.text; font-size: 12px; font-weight: 700; }
+                                Text { text: d.note; color: Theme.dim; font-size: 11px; wrap: word-wrap; }
+                            }
+                        }
+                        if track.chain.length == 0: Device {
                             width: 250px;
                             title: "EQ";
                             tint: Theme.effect;
@@ -1326,7 +1376,7 @@ export component AppWindow inherits Window {
                                 Knob { free: true; label: "Output"; display: "0 dB"; bipolar: true; size: 36px; tint: Theme.effect; }
                             }
                         }
-                        Device {
+                        if track.chain.length == 0: Device {
                             width: 230px;
                             title: "Echo";
                             tint: Theme.effect;

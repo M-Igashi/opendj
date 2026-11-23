@@ -8280,9 +8280,11 @@ name = "opendj-studio"
 version = "1.0.0-dev"
 dependencies = [
  "cpal",
+ "flate2",
  "midir",
  "opendj-engine",
- "png",
+ "png 0.18.1",
+ "roxmltree",
  "rtrb",
  "rusb",
  "rusty_link",

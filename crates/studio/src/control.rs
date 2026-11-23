@@ -6,7 +6,7 @@
 use std::sync::atomic::{AtomicI32, AtomicU32, AtomicU64, AtomicU8, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 
-use crate::clip::{Clip, Sound, Track, SCENES, TRACKS};
+use crate::clip::{Clip, Sound, Track, MAX_TRACKS, SCENES};
 use crate::engine::{Command, Monitor, Program, Quantize};
 use crate::sound::{self, PARAMS};
 use crate::steps::Stages;
@@ -49,11 +49,17 @@ pub struct TrackInfo {
     pub name: String,
     pub color: u32,
     pub sound: Sound,
+    pub devices: Vec<crate::clip::DeviceInfo>,
+    pub input: String,
 }
 
 impl TrackInfo {
     pub fn drums(&self) -> bool {
         matches!(self.sound, Sound::Drums(_))
+    }
+
+    pub fn audio(&self) -> bool {
+        self.sound == Sound::Audio
     }
 }
 
@@ -97,9 +103,9 @@ pub struct Controls {
     pub tracks: Vec<TrackInfo>,
     /// The clips, as last sent to the audio thread.
     set: Mutex<Vec<Track>>,
-    mix: [[AtomicU32; 4]; TRACKS],
+    mix: [[AtomicU32; 4]; MAX_TRACKS],
     main: AtomicU32,
-    params: [[AtomicU32; PARAMS]; TRACKS],
+    params: [[AtomicU32; PARAMS]; MAX_TRACKS],
     selected_track: AtomicUsize,
     selected_scene: AtomicI32,
     quantize: AtomicU8,
@@ -119,8 +125,10 @@ impl Controls {
             .enumerate()
             .map(|(i, t)| TrackInfo {
                 name: t.name.clone(),
-                color: colors.get(i).copied().unwrap_or(0xb69cff),
+                color: t.color.or(colors.get(i).copied()).unwrap_or(0xb69cff),
                 sound: t.sound,
+                devices: t.devices.clone(),
+                input: t.input.clone(),
             })
             .collect();
         let params = std::array::from_fn(|t| {
@@ -134,10 +142,11 @@ impl Controls {
             monitor,
             tracks,
             set: Mutex::new(set.to_vec()),
-            mix: std::array::from_fn(|_| {
+            mix: std::array::from_fn(|t| {
                 let [v, p, a, b]: [AtomicU32; 4] = floats(0.0);
-                store(&v, UNITY);
-                store(&p, 0.5);
+                let track = set.get(t);
+                store(&v, track.and_then(|t| t.volume).unwrap_or(UNITY));
+                store(&p, track.map_or(0.5, |t| t.pan));
                 [v, p, a, b]
             }),
             main: AtomicU32::new(UNITY.to_bits()),

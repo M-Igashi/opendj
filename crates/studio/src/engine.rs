@@ -25,8 +25,11 @@
 use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, AtomicU8, Ordering};
 use std::sync::Arc;
 
-use crate::clip::{Clip, Lock, Sound, Track, SCENES, TRACKS};
+#[cfg(test)]
+use crate::clip::TRACKS;
+use crate::clip::{Clip, Lock, Sound, Track, MAX_TRACKS, SCENES};
 use crate::sound::{self, Drums, Instrument, Synth, PARAMS};
+use opendj_engine::keyshift::KeyShifter;
 
 /// Beats in a bar; also the Link quantum, so bars line up with openDJ's.
 pub const QUANTUM: f64 = 4.0;
@@ -149,13 +152,13 @@ pub struct Monitor {
     beat: AtomicU64,
     tempo: AtomicU64,
     playing: AtomicBool,
-    slots: [AtomicU8; TRACKS * SCENES],
-    progress: [AtomicU32; TRACKS],
-    stopping: [AtomicBool; TRACKS],
+    slots: [AtomicU8; MAX_TRACKS * SCENES],
+    progress: [AtomicU32; MAX_TRACKS],
+    stopping: [AtomicBool; MAX_TRACKS],
     /// The stage each track's stage clip is on, 255 for none.
-    stages: [AtomicU8; TRACKS],
+    stages: [AtomicU8; MAX_TRACKS],
     /// Each track's peak since the UI last read it, after its fader.
-    peaks: [AtomicU32; TRACKS],
+    peaks: [AtomicU32; MAX_TRACKS],
     /// The main output's peak since the UI last read it.
     main_peak: AtomicU32,
     /// Time spent rendering over the block's length, smoothed.
@@ -191,7 +194,7 @@ impl Monitor {
     }
 
     pub fn slot(&self, track: usize, scene: usize) -> SlotState {
-        match self.slots[scene * TRACKS + track].load(Ordering::Relaxed) {
+        match self.slots[scene * MAX_TRACKS + track].load(Ordering::Relaxed) {
             1 => SlotState::Stopped,
             2 => SlotState::Queued,
             3 => SlotState::Playing,
@@ -330,6 +333,12 @@ struct Column {
     locked: u16,
     /// For notes that play by chance.
     rng: u32,
+    /// An audio track's player: recordings time-stretched to the beat.
+    stretch: Option<Box<KeyShifter>>,
+    /// The clip (scene) the player last played.
+    audio_scene: Option<usize>,
+    /// The player's output before its gain.
+    audio_buf: Vec<[f32; 2]>,
 }
 
 impl Column {
@@ -421,10 +430,14 @@ pub struct Engine {
     frames_done: u64,
     main_gain: f32,
     monitor: Arc<Monitor>,
+    rate: f64,
     /// Programs replaced, on their way back to the UI thread to be dropped.
     trash: rtrb::Producer<Box<Program>>,
     log: Option<Vec<Logged>>,
 }
+
+/// Frames an audio clip fades in or out over where it starts or stops.
+const FADE: usize = 128;
 
 /// The largest block rendered in one go; longer callbacks are cut up.
 pub const MAX_BLOCK: usize = 4096;
@@ -444,16 +457,24 @@ impl Engine {
                 pending: None,
                 held: [Held { pitch: 0, off: 0.0 }; MAX_HELD],
                 held_len: 0,
-                gain: 1.0,
-                pan: [1.0, 1.0],
+                gain: t.volume.map_or(1.0, crate::control::fader_gain),
+                pan: pan_gains(t.pan),
                 base: sound::default_params(t.sound),
                 locked: 0,
+                stretch: (t.sound == Sound::Audio).then(|| Box::new(KeyShifter::new(rate))),
+                audio_scene: None,
+                audio_buf: if t.sound == Sound::Audio {
+                    vec![[0.0; 2]; MAX_BLOCK]
+                } else {
+                    Vec::new()
+                },
                 rng: 0x9E37_79B9 ^ (i as u32 + 1).wrapping_mul(0x85EB_CA6B),
                 instrument: match t.sound {
                     Sound::Drums(kit) => Instrument::Drums(Box::new(Drums::new(kit, rate, 0.45))),
                     Sound::Bass => Instrument::Synth(Box::new(Synth::new(sound::BASS, rate))),
                     Sound::Pad => Instrument::Synth(Box::new(Synth::new(sound::PAD, rate))),
                     Sound::Lead => Instrument::Synth(Box::new(Synth::new(sound::LEAD, rate))),
+                    Sound::Audio => Instrument::None,
                 },
             })
             .collect();
@@ -468,6 +489,7 @@ impl Engine {
             frames_done: 0,
             main_gain: 1.0,
             monitor,
+            rate,
             trash,
             log: None,
         }
@@ -662,9 +684,10 @@ impl Engine {
             span.tempo / 60.0 / 48_000.0
         };
         for t in 0..self.columns.len() {
+            let mut switch = None;
             if self.playing {
                 self.events.clear();
-                self.track_events(t, start, end);
+                switch = self.track_events(t, start, end);
                 self.events.sort_unstable_by(|a, b| {
                     a.beat
                         .total_cmp(&b.beat)
@@ -714,10 +737,39 @@ impl Engine {
             if done < frames {
                 self.columns[t].instrument.render(&mut scratch[done..]);
             }
+            if self.columns[t].stretch.is_some() {
+                let frame =
+                    |beat: f64| (((beat - start) / beats_per_frame).round() as usize).min(frames);
+                let now = if self.playing {
+                    self.columns[t].playing
+                } else {
+                    None
+                };
+                match switch {
+                    Some((at, before)) => {
+                        let f = frame(at);
+                        self.audio_segment(t, before, start, (0, f), span.tempo, (false, true));
+                        self.audio_segment(t, now, at, (f, frames), span.tempo, (true, false));
+                    }
+                    None => {
+                        self.audio_segment(t, now, start, (0, frames), span.tempo, (false, false))
+                    }
+                }
+                let c = &self.columns[t];
+                if c.audio_scene.is_some() {
+                    for (o, a) in self.scratch[..frames]
+                        .iter_mut()
+                        .zip(&c.audio_buf[..frames])
+                    {
+                        o[0] += a[0];
+                        o[1] += a[1];
+                    }
+                }
+            }
             let gain = self.columns[t].gain;
             let [pl, pr] = self.columns[t].pan;
             let mut peak = 0.0f32;
-            for (o, s) in out.iter_mut().zip(scratch.iter()) {
+            for (o, s) in out.iter_mut().zip(self.scratch[..frames].iter()) {
                 let (l, r) = (s[0] * gain * pl, s[1] * gain * pr);
                 peak = peak.max(l.abs()).max(r.abs());
                 o[0] += l;
@@ -742,8 +794,11 @@ impl Engine {
 
     /// Collects `track`'s note events in [`lo`, `hi`) into `self.events`,
     /// switching clips at a pending launch point.
-    fn track_events(&mut self, t: usize, lo: f64, hi: f64) {
+    /// Returns the switch, if there was one: its beat and the clip that
+    /// played before it.
+    fn track_events(&mut self, t: usize, lo: f64, hi: f64) -> Option<(f64, Option<(usize, f64)>)> {
         let mut from = lo;
+        let mut switch = None;
         if let Some(p) = self.columns[t].pending {
             if p.at < hi {
                 let at = p.at.max(lo);
@@ -756,12 +811,82 @@ impl Engine {
                 c.held_len = 0;
                 push(&mut self.events, at, Kind::AllOff, 255);
                 push(&mut self.events, at, Kind::Unlock, 255);
+                switch = Some((at, c.playing));
                 c.playing = p.scene.map(|s| (s, at));
                 c.pending = None;
                 from = at;
             }
         }
         self.clip_events(t, from, hi);
+        switch
+    }
+
+    /// Plays `t`'s audio clip over beats `from..to`, frames `f0..f1` of
+    /// the block; `fade_in`/`fade_out` when the clip starts or stops there.
+    #[allow(clippy::too_many_arguments)]
+    fn audio_segment(
+        &mut self,
+        t: usize,
+        playing: Option<(usize, f64)>,
+        from: f64,
+        frames: (usize, usize),
+        tempo: f64,
+        fades: (bool, bool),
+    ) {
+        let (f0, f1) = frames;
+        let c = &mut self.columns[t];
+        let Some(stretch) = c.stretch.as_mut() else {
+            return;
+        };
+        let clip = playing.and_then(|(s, at)| Some((s, at, self.program.clip(t, s)?)));
+        let Some((scene, launched, clip)) = clip else {
+            stretch.stop();
+            c.audio_scene = None;
+            return;
+        };
+        let (Some(a), true) = (clip.audio.as_ref(), clip.beats > 0.0) else {
+            return;
+        };
+        let Some(audio) = a.data.as_deref() else {
+            return;
+        };
+        if f1 <= f0 {
+            return;
+        }
+        if c.audio_scene != Some(scene) {
+            stretch.stop();
+            c.audio_scene = Some(scene);
+        }
+        let rate = audio.sample_rate as f64;
+        let pos = (from - launched).max(0.0).rem_euclid(clip.beats);
+        let (sec, per) = a.seconds(a.start + pos, tempo);
+        let (lo, _) = a.seconds(a.start, tempo);
+        let (hi, _) = a.seconds(a.start + clip.beats, tempo);
+        let speed = (per * tempo / 60.0).clamp(0.25, 4.0);
+        let buf = &mut c.audio_buf[f0..f1];
+        buf.fill([0.0; 2]);
+        stretch.render(
+            audio,
+            sec * rate,
+            speed,
+            rate / self.rate,
+            1.0,
+            Some((lo * rate, hi * rate)),
+            buf,
+        );
+        let n = buf.len();
+        let ramp = FADE.min(n);
+        for (i, f) in buf.iter_mut().enumerate() {
+            let mut g = a.gain;
+            if fades.0 && i < ramp {
+                g *= i as f32 / ramp as f32;
+            }
+            if fades.1 && i >= n - ramp {
+                g *= (n - i) as f32 / ramp as f32;
+            }
+            f[0] *= g;
+            f[1] *= g;
+        }
     }
 
     fn clip_events(&mut self, t: usize, lo: f64, hi: f64) {
@@ -855,7 +980,7 @@ impl Engine {
                 } else {
                     SlotState::Empty
                 };
-                m.slots[s * TRACKS + t].store(state as u8, Ordering::Relaxed);
+                m.slots[s * MAX_TRACKS + t].store(state as u8, Ordering::Relaxed);
             }
             let progress = match c.playing {
                 Some((s, at)) => match self.program.clip(t, s) {
@@ -1081,17 +1206,9 @@ mod tests {
         let mut slots = vec![None; SCENES];
         slots[0] = clip("a", 60);
         slots[1] = clip("b", 62);
-        let mut tracks = vec![Track {
-            name: "Lead".into(),
-            sound: Sound::Lead,
-            slots,
-        }];
+        let mut tracks = vec![Track::new("Lead", Sound::Lead, slots)];
         for _ in 1..TRACKS {
-            tracks.push(Track {
-                name: "Empty".into(),
-                sound: Sound::Lead,
-                slots: vec![None; SCENES],
-            });
+            tracks.push(Track::new("Empty", Sound::Lead, vec![None; SCENES]));
         }
         tracks
     }
@@ -1255,5 +1372,51 @@ mod tests {
         assert_eq!(ons, STAGES - 1);
         let c = &studio.engine.columns[0];
         assert_eq!(c.locked, 0, "the lock let go after stage 2");
+    }
+
+    #[test]
+    fn audio_clips_follow_the_tempo_and_keep_their_key() {
+        use crate::clip::AudioClip;
+        // Four seconds of 440 Hz, recorded at 120 BPM (half a second a beat).
+        let rate = 48_000.0;
+        let frames: Vec<[f32; 2]> = (0..4 * 48_000)
+            .map(|i| {
+                let v = (i as f32 * 440.0 * std::f32::consts::TAU / 48_000.0).sin() * 0.5;
+                [v, v]
+            })
+            .collect();
+        let mut clip = Clip::new("take", 8.0, Vec::new());
+        clip.audio = Some(AudioClip {
+            path: "take.wav".into(),
+            data: Some(Arc::new(opendj_engine::track::Audio::from_frames(
+                48_000, frames,
+            ))),
+            warp: vec![(0.0, 0.0), (1.0, 0.5)],
+            start: 0.0,
+            gain: 1.0,
+        });
+        let mut slots = vec![None; SCENES];
+        slots[0] = Some(clip);
+        let set = vec![Track::new("Mic", Sound::Audio, slots)];
+        // Played at 100 BPM: slower, same pitch.
+        let (mut studio, mut r) = Studio::new(&set, rate, 100.0);
+        r.commands.push(Command::Launch { track: 0, scene: 0 }).ok();
+        let mut out = vec![[0.0f32; 2]; BLOCK];
+        let mut heard = Vec::new();
+        for _ in 0..(rate as usize * 2 / BLOCK) {
+            studio.process(&mut out);
+            heard.extend(out.iter().map(|f| f[0]));
+        }
+        // The second second: steady, about 440 crossings up a second.
+        let second = &heard[rate as usize..2 * rate as usize];
+        let ups = second
+            .windows(2)
+            .filter(|w| w[0] < 0.0 && w[1] >= 0.0)
+            .count();
+        assert!((425..=455).contains(&ups), "{ups} cycles a second");
+        let loud = second.iter().fold(0.0f32, |m, v| m.max(v.abs()));
+        assert!(loud > 0.2, "peak {loud}");
+        // Two seconds at 100 BPM is 3.33 beats of the clip's 8.
+        assert!((studio.monitor.progress(0) - 3.33 / 8.0).abs() < 0.02);
     }
 }

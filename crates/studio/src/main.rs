@@ -10,6 +10,7 @@
 //!
 //! openDJ never depends on this crate: it can move to its own repository.
 
+mod als;
 mod audio;
 mod check;
 mod clip;
@@ -31,6 +32,7 @@ use slint::{Color, ComponentHandle, Model, ModelRc, SharedString, VecModel};
 use clip::{SCENES, TRACKS};
 use control::{Controls, Mix};
 use engine::{Quantize, Studio};
+use std::path::Path;
 
 slint::include_modules!();
 
@@ -50,6 +52,7 @@ fn device_name(sound: clip::Sound) -> String {
         clip::Sound::Bass => "Bass Synth".into(),
         clip::Sound::Pad => "Pad Synth".into(),
         clip::Sound::Lead => "Lead Synth".into(),
+        clip::Sound::Audio => "Audio".into(),
     }
 }
 
@@ -73,26 +76,106 @@ fn main() {
             std::process::exit(check::render(path));
         }
         Some("--link-check") => std::process::exit(check::link()),
+        Some("--als-info") => {
+            let Some(path) = args.get(1) else {
+                eprintln!("--als-info needs a .als file");
+                std::process::exit(2);
+            };
+            match als::read(std::path::Path::new(path)) {
+                Ok(set) => print!("{}", als::summary(&set)),
+                Err(e) => {
+                    eprintln!("{e}");
+                    std::process::exit(1);
+                }
+            }
+            std::process::exit(0);
+        }
         Some("--push-preview") => {
             let path = args.get(1).map(String::as_str).unwrap_or("push.png");
             std::process::exit(check::push_preview(path));
         }
+        Some(path) if !path.starts_with("--") => {}
         Some(other) => {
             eprintln!(
-                "unknown option {other}; use --check, --render <file.wav>, --link-check or --push-preview <file.png>"
+                "unknown option {other}; use a .als file, --check, --render <file.wav>, --link-check, --als-info <file.als> or --push-preview <file.png>"
             );
             std::process::exit(2);
         }
         None => {}
     }
-    if let Err(e) = run_ui() {
+    let opened = match args.first() {
+        Some(path) => match open_set(Path::new(path)) {
+            Ok(o) => o,
+            Err(e) => {
+                eprintln!("openDJ Studio: {e}");
+                std::process::exit(1);
+            }
+        },
+        None => Opened {
+            tracks: clip::demo_set(),
+            tempo: TEMPO,
+            returns: vec![("A Return".into(), 0), ("B Return".into(), 0)],
+            note: String::new(),
+        },
+    };
+    if let Err(e) = run_ui(opened) {
         eprintln!("openDJ Studio: {e}");
         std::process::exit(1);
     }
 }
 
-fn run_ui() -> Result<(), slint::PlatformError> {
-    let set = clip::demo_set();
+/// A set to play: the demo, or a Live set from the command line.
+struct Opened {
+    tracks: Vec<clip::Track>,
+    tempo: f64,
+    returns: Vec<(String, u32)>,
+    /// For the status line: what didn't come in.
+    note: String,
+}
+
+fn open_set(path: &Path) -> Result<Opened, String> {
+    let mut set = als::read(path)?;
+    let mut files: Vec<_> = set
+        .tracks
+        .iter()
+        .flat_map(|t| t.slots.iter().flatten())
+        .filter_map(|c| c.audio.as_ref().map(|a| a.path.clone()))
+        .collect();
+    files.sort();
+    files.dedup();
+    let files = files.len();
+    let missing = als::decode_audio(&mut set.tracks);
+    for m in &missing {
+        eprintln!("not found: {m}");
+    }
+    for l in &set.left_out {
+        eprintln!("left out: {l}");
+    }
+    let name = path
+        .file_stem()
+        .map_or(String::new(), |n| n.to_string_lossy().into());
+    let mut note = name;
+    if !missing.is_empty() {
+        note += &format!(" · {} of {files} recordings not found", missing.len());
+    }
+    if !set.left_out.is_empty() {
+        note += " · Arrangement and some parts left out";
+    }
+    Ok(Opened {
+        tracks: set.tracks,
+        tempo: set.tempo,
+        returns: set.returns,
+        note,
+    })
+}
+
+fn run_ui(opened: Opened) -> Result<(), slint::PlatformError> {
+    let Opened {
+        tracks: set,
+        tempo,
+        returns,
+        note,
+    } = opened;
     let device = if std::env::var_os("OPENDJ_NO_AUDIO").is_some() {
         None
     } else {
@@ -101,8 +184,8 @@ fn run_ui() -> Result<(), slint::PlatformError> {
     let rate = device
         .as_ref()
         .map_or(48_000.0, |(_, c)| c.sample_rate() as f64);
-    let (mut studio, remote) = Studio::new(&set, rate, TEMPO);
-    let mut link_clock = link::LinkClock::new(TEMPO, rate);
+    let (mut studio, remote) = Studio::new(&set, rate, tempo);
+    let mut link_clock = link::LinkClock::new(tempo, rate);
     link_clock.set_latency(audio::BUFFER_FRAMES as f64 / rate);
     let link = link_clock.handle();
     studio.link = Some(link_clock);
@@ -126,13 +209,15 @@ fn run_ui() -> Result<(), slint::PlatformError> {
                     eprintln!("audio output: {e}");
                     // The studio moved into the failed stream; start again
                     // without sound.
-                    let (studio, remote2) = Studio::new(&set, rate, TEMPO);
+                    let (studio, remote2) = Studio::new(&set, rate, tempo);
                     return ui(
                         set,
+                        &returns,
                         audio::start_silent(studio),
                         remote2,
                         link,
                         format!("No sound: {e}"),
+                        note,
                     );
                 }
             }
@@ -142,16 +227,25 @@ fn run_ui() -> Result<(), slint::PlatformError> {
             "No audio output found: playing silently".to_string(),
         ),
     };
-    ui(set, output, remote, link, status)
+    ui(set, &returns, output, remote, link, status, note)
 }
 
+#[allow(clippy::too_many_arguments)]
 fn ui(
     set: Vec<clip::Track>,
+    returns: &[(String, u32)],
     output: audio::Output,
     remote: engine::Remote,
     link: Arc<rusty_link::AblLink>,
     status: String,
+    note: String,
 ) -> Result<(), slint::PlatformError> {
+    let status = if note.is_empty() {
+        status
+    } else {
+        format!("{note} · {status}")
+    };
+    let n = set.len();
     let window = AppWindow::new()?;
     let monitor = remote.monitor.clone();
     let controls = Arc::new(Controls::new(
@@ -168,11 +262,16 @@ fn ui(
     let slots = Rc::new(VecModel::from(
         (0..SCENES)
             .flat_map(|s| {
+                let colors: Vec<u32> = set
+                    .iter()
+                    .enumerate()
+                    .map(|(t, tr)| tr.color.unwrap_or(TRACK_COLORS[t % TRACKS]))
+                    .collect();
                 set.iter().enumerate().map(move |(t, track)| {
                     let clip = track.slots[s].as_ref();
                     SlotData {
                         name: clip.map_or(SharedString::new(), |c| c.name.as_str().into()),
-                        color: color(TRACK_COLORS[t]),
+                        color: color(colors[t]),
                         state: if clip.is_some() {
                             SlotState::Stopped
                         } else {
@@ -190,6 +289,20 @@ fn ui(
     window.set_status(status.clone().into());
     window.set_quantize(Quantize::Bar.label().into());
     window.set_main_volume(controls.main_volume());
+    for (i, (name, rgb)) in returns.iter().take(2).enumerate() {
+        let c = if *rgb == 0 { None } else { Some(color(*rgb)) };
+        if i == 0 {
+            window.set_return_a(name.as_str().into());
+            if let Some(c) = c {
+                window.set_return_a_color(c);
+            }
+        } else {
+            window.set_return_b(name.as_str().into());
+            if let Some(c) = c {
+                window.set_return_b_color(c);
+            }
+        }
+    }
 
     let trash = RefCell::new(remote.trash);
     let push_status: push::Status = Arc::new(Mutex::new(String::new()));
@@ -269,8 +382,8 @@ fn ui(
             // Programs the audio thread replaced are dropped here.
             while trash.borrow_mut().pop().is_ok() {}
             for s in 0..SCENES {
-                for t in 0..TRACKS {
-                    let i = s * TRACKS + t;
+                for t in 0..n {
+                    let i = s * n + t;
                     let state = match monitor.slot(t, s) {
                         engine::SlotState::Empty => SlotState::Empty,
                         engine::SlotState::Stopped => SlotState::Stopped,
@@ -292,7 +405,7 @@ fn ui(
             if changed {
                 // Clips Push made or changed in Steps mode.
                 for i in 0..slots.row_count() {
-                    let (t, sc) = (i % TRACKS, i / TRACKS);
+                    let (t, sc) = (i % n, i / n);
                     let info = controls.clip_info(t, sc);
                     if let Some(mut row) = slots.row_data(i) {
                         let name: SharedString = info
@@ -387,6 +500,24 @@ fn track_row(c: &Controls, t: usize) -> TrackData {
         stopping: c.monitor.stopping(t),
         device: device_name(info.sound).into(),
         drums: info.drums(),
+        audio: info.audio(),
+        kind: if info.audio() { "AUDIO" } else { "MIDI" }.into(),
+        input: info.input.as_str().into(),
+        chain: ModelRc::new(VecModel::from(
+            info.devices
+                .iter()
+                .map(|d| DeviceData {
+                    name: d.name.as_str().into(),
+                    kind: d.kind.as_str().into(),
+                    note: if d.kind == "Live" {
+                        "Live device: not available"
+                    } else {
+                        "Plugin: hosting comes next"
+                    }
+                    .into(),
+                })
+                .collect::<Vec<_>>(),
+        )),
         level: 0.0,
         volume,
         volume_text: control::fader_text(volume).into(),

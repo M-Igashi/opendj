@@ -15,6 +15,8 @@ use opendj_engine::sampler::Sample;
 pub enum Instrument {
     Drums(Box<Drums>),
     Synth(Box<Synth>),
+    /// An audio track's: notes do nothing.
+    None,
 }
 
 impl Instrument {
@@ -22,6 +24,7 @@ impl Instrument {
         match self {
             Instrument::Drums(d) => d.note_on(pitch, velocity),
             Instrument::Synth(s) => s.note_on(pitch, velocity),
+            Instrument::None => {}
         }
     }
 
@@ -34,7 +37,7 @@ impl Instrument {
     /// Releases every sounding note (a clip stopped).
     pub fn all_off(&mut self) {
         match self {
-            Instrument::Drums(_) => {}
+            Instrument::Drums(_) | Instrument::None => {}
             Instrument::Synth(s) => s.all_off(),
         }
     }
@@ -45,6 +48,7 @@ impl Instrument {
         match self {
             Instrument::Drums(d) => d.set_param(index, v),
             Instrument::Synth(s) => s.preset.set_param(index, v),
+            Instrument::None => {}
         }
     }
 
@@ -53,6 +57,7 @@ impl Instrument {
         match self {
             Instrument::Drums(d) => d.render(out),
             Instrument::Synth(s) => s.render(out),
+            Instrument::None => {}
         }
     }
 }
@@ -155,7 +160,7 @@ pub fn default_params(sound: crate::clip::Sound) -> [f32; PARAMS] {
         Sound::Drums(_) => return [0.5, 1.0, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5],
         Sound::Bass => BASS,
         Sound::Pad => PAD,
-        Sound::Lead => LEAD,
+        Sound::Lead | Sound::Audio => LEAD,
     };
     preset.params()
 }

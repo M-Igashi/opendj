@@ -2,6 +2,9 @@
 
 use crate::sound::{CLAP, CLOSED_HAT, KICK, OPEN_HAT, PARAMS, RIM, SNARE};
 use crate::steps::{self, Layer, Stages};
+use opendj_engine::track::Audio;
+use std::path::PathBuf;
+use std::sync::Arc;
 
 /// A note in a clip, in beats from the clip's start.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -38,6 +41,42 @@ pub struct Clip {
     pub stage_starts: Vec<(f64, u8)>,
     /// What it was made from, when it is a stage clip.
     pub stages: Option<Box<Stages>>,
+    /// The recording it plays, when it is an audio clip.
+    pub audio: Option<AudioClip>,
+}
+
+/// An audio clip: a file played through a warp map, so its beats land on
+/// the set's beats at any tempo.
+#[derive(Clone, Debug)]
+pub struct AudioClip {
+    pub path: PathBuf,
+    /// Decoded before the set plays; None when the file is missing.
+    pub data: Option<Arc<Audio>>,
+    /// Warp markers: (beat in the clip, second in the file), sorted. With
+    /// fewer than two, the file plays at its own speed.
+    pub warp: Vec<(f64, f64)>,
+    /// The clip's loop start, in clip beats.
+    pub start: f64,
+    pub gain: f32,
+}
+
+impl AudioClip {
+    /// The second in the file at clip beat `beat`, and seconds per beat
+    /// there, following the warp markers (extended past the ends).
+    pub fn seconds(&self, beat: f64, tempo: f64) -> (f64, f64) {
+        let w = &self.warp;
+        if w.len() < 2 {
+            let per = 60.0 / tempo.max(1.0);
+            return (beat * per, per);
+        }
+        let i = w
+            .windows(2)
+            .position(|p| beat < p[1].0)
+            .unwrap_or(w.len() - 2);
+        let (a, b) = (w[i], w[i + 1]);
+        let per = (b.1 - a.1) / (b.0 - a.0).max(1e-9);
+        (a.1 + (beat - a.0) * per, per)
+    }
 }
 
 impl Clip {
@@ -51,6 +90,7 @@ impl Clip {
             locks: Vec::new(),
             stage_starts: Vec::new(),
             stages: None,
+            audio: None,
         }
     }
 }
@@ -63,6 +103,16 @@ pub enum Sound {
     Bass,
     Pad,
     Lead,
+    /// An audio track: its clips are recordings.
+    Audio,
+}
+
+/// A device on a track, as a set lists it.
+#[derive(Clone, Debug, PartialEq)]
+pub struct DeviceInfo {
+    pub name: String,
+    /// "Live", "AU", "VST3", "VST" or "Built-in".
+    pub kind: String,
 }
 
 /// A track: a column of clip slots.
@@ -71,9 +121,36 @@ pub struct Track {
     pub name: String,
     pub sound: Sound,
     pub slots: Vec<Option<Clip>>,
+    /// Its own colour (0xRRGGBB), when the set gives one.
+    pub color: Option<u32>,
+    /// Fader position (0..1) and pan (0..1), when the set gives them.
+    pub volume: Option<f32>,
+    pub pan: f32,
+    /// Its devices in order, for show until they can load.
+    pub devices: Vec<DeviceInfo>,
+    /// Where it listens, as the set names it (audio tracks).
+    pub input: String,
 }
 
+impl Track {
+    pub fn new(name: &str, sound: Sound, slots: Vec<Option<Clip>>) -> Track {
+        Track {
+            name: name.into(),
+            sound,
+            slots,
+            color: None,
+            volume: None,
+            pan: 0.5,
+            devices: Vec::new(),
+            input: String::new(),
+        }
+    }
+}
+
+/// The demo set's track count.
 pub const TRACKS: usize = 4;
+/// The most tracks a set can have.
+pub const MAX_TRACKS: usize = 16;
 pub const SCENES: usize = 8;
 
 fn n(start: f64, length: f64, pitch: u8, velocity: f32) -> Note {
@@ -359,26 +436,10 @@ pub fn demo_set() -> Vec<Track> {
         None,
     ];
     vec![
-        Track {
-            name: "Drums".into(),
-            sound: Sound::Drums("Punch"),
-            slots: drums_col,
-        },
-        Track {
-            name: "Bass".into(),
-            sound: Sound::Bass,
-            slots: bass_col,
-        },
-        Track {
-            name: "Chords".into(),
-            sound: Sound::Pad,
-            slots: chord_col,
-        },
-        Track {
-            name: "Lead".into(),
-            sound: Sound::Lead,
-            slots: lead_col,
-        },
+        Track::new("Drums", Sound::Drums("Punch"), drums_col),
+        Track::new("Bass", Sound::Bass, bass_col),
+        Track::new("Chords", Sound::Pad, chord_col),
+        Track::new("Lead", Sound::Lead, lead_col),
     ]
 }
 
