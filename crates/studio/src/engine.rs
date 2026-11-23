@@ -105,6 +105,13 @@ pub enum Command {
     Play(bool),
     Tempo(f64),
     Quantize(Quantize),
+    /// A track's fader, as a linear gain.
+    Volume {
+        track: usize,
+        gain: f32,
+    },
+    /// The main fader, as a linear gain.
+    MainVolume(f32),
     /// A recompiled set, after an edit (clip editing comes in step 3).
     #[allow(dead_code)]
     Program(Box<Program>),
@@ -128,6 +135,10 @@ pub struct Monitor {
     slots: [AtomicU8; TRACKS * SCENES],
     progress: [AtomicU32; TRACKS],
     stopping: [AtomicBool; TRACKS],
+    /// Each track's peak since the UI last read it, after its fader.
+    peaks: [AtomicU32; TRACKS],
+    /// The main output's peak since the UI last read it.
+    main_peak: AtomicU32,
     /// Time spent rendering over the block's length, smoothed.
     load: AtomicU32,
 }
@@ -141,6 +152,8 @@ impl Monitor {
             slots: std::array::from_fn(|_| AtomicU8::new(0)),
             progress: std::array::from_fn(|_| AtomicU32::new((-1f32).to_bits())),
             stopping: std::array::from_fn(|_| AtomicBool::new(false)),
+            peaks: std::array::from_fn(|_| AtomicU32::new(0)),
+            main_peak: AtomicU32::new(0),
             load: AtomicU32::new(0),
         }
     }
@@ -173,6 +186,16 @@ impl Monitor {
 
     pub fn stopping(&self, track: usize) -> bool {
         self.stopping[track].load(Ordering::Relaxed)
+    }
+
+    /// `track`'s peak since the last call, and starts a new one.
+    pub fn take_peak(&self, track: usize) -> f32 {
+        f32::from_bits(self.peaks[track].swap(0, Ordering::Relaxed))
+    }
+
+    /// The main output's peak since the last call.
+    pub fn take_main_peak(&self) -> f32 {
+        f32::from_bits(self.main_peak.swap(0, Ordering::Relaxed))
     }
 
     pub fn load(&self) -> f32 {
@@ -270,6 +293,7 @@ struct Column {
     held: [Held; MAX_HELD],
     held_len: usize,
     instrument: Instrument,
+    gain: f32,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -315,6 +339,7 @@ pub struct Engine {
     events: Vec<Event>,
     scratch: Vec<[f32; 2]>,
     frames_done: u64,
+    main_gain: f32,
     monitor: Arc<Monitor>,
     /// Programs replaced, on their way back to the UI thread to be dropped.
     trash: rtrb::Producer<Box<Program>>,
@@ -338,6 +363,7 @@ impl Engine {
                 pending: None,
                 held: [Held { pitch: 0, off: 0.0 }; MAX_HELD],
                 held_len: 0,
+                gain: 1.0,
                 instrument: match t.sound {
                     Sound::Drums(kit) => Instrument::Drums(Box::new(Drums::new(kit, rate, 0.45))),
                     Sound::Bass => Instrument::Synth(Box::new(Synth::new(sound::BASS, rate))),
@@ -355,6 +381,7 @@ impl Engine {
             events: Vec::with_capacity(MAX_EVENTS),
             scratch: vec![[0.0; 2]; MAX_BLOCK],
             frames_done: 0,
+            main_gain: 1.0,
             monitor,
             trash,
             log: None,
@@ -427,6 +454,16 @@ impl Engine {
                 }
             }
             Command::Tempo(bpm) => Some(ClockChange::Tempo(bpm)),
+            Command::Volume { track, gain } => {
+                if let Some(c) = self.columns.get_mut(track) {
+                    c.gain = gain.max(0.0);
+                }
+                None
+            }
+            Command::MainVolume(gain) => {
+                self.main_gain = gain.max(0.0);
+                None
+            }
             Command::Quantize(q) => {
                 self.quantize = q;
                 None
@@ -545,15 +582,27 @@ impl Engine {
             if done < frames {
                 self.columns[t].instrument.render(&mut scratch[done..]);
             }
+            let gain = self.columns[t].gain;
+            let mut peak = 0.0f32;
             for (o, s) in out.iter_mut().zip(scratch.iter()) {
-                o[0] += s[0];
-                o[1] += s[1];
+                let (l, r) = (s[0] * gain, s[1] * gain);
+                peak = peak.max(l.abs()).max(r.abs());
+                o[0] += l;
+                o[1] += r;
             }
+            // Positive floats order like their bits.
+            self.monitor.peaks[t].fetch_max(peak.to_bits(), Ordering::Relaxed);
         }
+        let gain = MASTER * self.main_gain;
+        let mut peak = 0.0f32;
         for o in out.iter_mut() {
-            o[0] = soft_clip(o[0] * MASTER);
-            o[1] = soft_clip(o[1] * MASTER);
+            o[0] = soft_clip(o[0] * gain);
+            o[1] = soft_clip(o[1] * gain);
+            peak = peak.max(o[0].abs()).max(o[1].abs());
         }
+        self.monitor
+            .main_peak
+            .fetch_max(peak.to_bits(), Ordering::Relaxed);
         self.frames_done += frames as u64;
         self.publish(end, span.tempo);
     }

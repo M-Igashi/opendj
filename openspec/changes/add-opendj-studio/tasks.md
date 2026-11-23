@@ -8,6 +8,7 @@
 - [x] 1.4 Ableton Link: join the session, follow its tempo and phase, change the session's tempo
 - [x] 1.5 Offline render and a timing and CPU check (`opendj-studio --check`)
 - [ ] 1.6 Try it on macOS next to openDJ over Link
+- [x] 1.7 Window laid out like a Session view: browser, thinner tracks with mixer strips (volume and meters work), returns A and B and Main, and a device row for the selected track (sends, pan, browser and device controls are not connected yet)
 
 ## 2. Instruments and sets
 

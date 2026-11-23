@@ -39,6 +39,37 @@ fn color(rgb: u32) -> Color {
     Color::from_rgb_u8((rgb >> 16) as u8, (rgb >> 8) as u8, rgb as u8)
 }
 
+/// What the device row calls a track's instrument.
+fn device_name(sound: clip::Sound) -> String {
+    match sound {
+        clip::Sound::Drums(kit) => format!("Drum Kit · {kit}"),
+        clip::Sound::Bass => "Bass Synth".into(),
+        clip::Sound::Pad => "Pad Synth".into(),
+        clip::Sound::Lead => "Lead Synth".into(),
+    }
+}
+
+/// A fader position (0..1) as a gain: 0 is silence, 1 is +6 dB and 0 dB
+/// sits at 60/66, so each step of the fader is the same number of dB.
+fn fader_gain(position: f32) -> f32 {
+    if position <= 0.001 {
+        0.0
+    } else {
+        10f32.powf((6.0 - (1.0 - position) * 66.0) / 20.0)
+    }
+}
+
+/// A meter's next height (0..1 over -60..+6 dB) from its last height and
+/// the peak since: jumps up, falls back about 20 dB a second.
+fn meter(last: f32, peak: f32) -> f32 {
+    let now = if peak > 0.0 {
+        ((20.0 * peak.log10() + 60.0) / 66.0).clamp(0.0, 1.0)
+    } else {
+        0.0
+    };
+    now.max(last - 0.01)
+}
+
 fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();
     match args.first().map(String::as_str) {
@@ -130,6 +161,9 @@ fn ui(
                 color: color(TRACK_COLORS[i]),
                 progress: -1.0,
                 stopping: false,
+                device: device_name(t.sound).into(),
+                drums: matches!(t.sound, clip::Sound::Drums(_)),
+                level: 0.0,
             })
             .collect::<Vec<_>>(),
     ));
@@ -146,6 +180,7 @@ fn ui(
                         } else {
                             SlotState::Empty
                         },
+                        beats: clip.map_or(0.0, |c| c.beats as f32),
                     }
                 })
             })
@@ -212,6 +247,19 @@ fn ui(
             std::thread::spawn(move || link.enable(!link.is_enabled()));
         });
     }
+    {
+        let send = send.clone();
+        window.on_volume(move |t, v| {
+            send(Command::Volume {
+                track: t as usize,
+                gain: fader_gain(v),
+            })
+        });
+    }
+    {
+        let send = send.clone();
+        window.on_main_volume(move |v| send(Command::MainVolume(fader_gain(v))));
+    }
     let quantize = Rc::new(Cell::new(Quantize::Bar));
     {
         let send = send.clone();
@@ -257,13 +305,19 @@ fn ui(
                 if let Some(mut row) = tracks.row_data(t) {
                     let progress = monitor.progress(t);
                     let stopping = monitor.stopping(t);
-                    if (row.progress - progress).abs() > 0.002 || row.stopping != stopping {
+                    let level = meter(row.level, monitor.take_peak(t));
+                    if (row.progress - progress).abs() > 0.002
+                        || row.stopping != stopping
+                        || (row.level - level).abs() > 0.005
+                    {
                         row.progress = progress;
                         row.stopping = stopping;
+                        row.level = level;
                         tracks.set_row_data(t, row);
                     }
                 }
             }
+            w.set_main_level(meter(w.get_main_level(), monitor.take_main_peak()));
             let beat = monitor.beat();
             let bar = (beat / engine::QUANTUM).floor();
             let in_bar = beat.rem_euclid(engine::QUANTUM).floor();
