@@ -287,12 +287,12 @@ pub fn link() -> i32 {
 }
 
 /// Draws what Push 2's screen shows for the demo set, a clip playing on
-/// each track, into a PNG: once with the instrument knobs, once with the
-/// mixer.
+/// each track, into a PNG: with the instrument knobs, with the mixer, and
+/// in Steps mode holding a stage with a lock.
 pub fn push_preview(path: &str) -> i32 {
     use crate::control::{Controls, Mix};
     use crate::push::display::{self, HEIGHT, WIDTH};
-    use crate::push::surface::{Encoders, Surface};
+    use crate::push::surface::{Encoders, Surface, NOTE, PAD_FIRST};
 
     let set = clip::demo_set();
     let (mut s, r) = Studio::new(&set, RATE, TEMPO);
@@ -315,19 +315,33 @@ pub fn push_preview(path: &str) -> i32 {
     };
     let mut surface = Surface::new();
     let mut frames = Vec::new();
-    for encoders in [Encoders::Device, Encoders::Mix(Mix::Volume)] {
-        surface.encoders = encoders;
+    let settle = |renderer: &mut display::Renderer, surface: &Surface| {
         // Let the animations (and the page-name toast) finish.
         let start = std::time::Instant::now();
         while start.elapsed() < std::time::Duration::from_millis(1200) {
-            renderer.update(&c, &surface);
+            renderer.update(&c, surface);
             renderer.draw();
             std::thread::sleep(std::time::Duration::from_millis(16));
         }
-        frames.push(renderer.frame().rgb());
+        renderer.frame().rgb()
+    };
+    for encoders in [Encoders::Device, Encoders::Mix(Mix::Volume)] {
+        surface.encoders = encoders;
+        frames.push(settle(&mut renderer, &surface));
     }
+    // Steps mode on the bass's stage clip, holding its locked stage.
+    surface.encoders = Encoders::Device;
+    c.select(1, Some(0));
+    for m in [
+        [0xB0, NOTE, 127],
+        [0xB0, NOTE, 127],
+        [0x90, PAD_FIRST + 5, 100],
+    ] {
+        surface.input(&m, &c);
+    }
+    frames.push(settle(&mut renderer, &surface));
     let gap = 12;
-    let height = HEIGHT * 2 + gap;
+    let height = HEIGHT * frames.len() + gap * (frames.len() - 1);
     let mut rgb = vec![40u8; WIDTH * height * 3];
     for (i, f) in frames.iter().enumerate() {
         let start = i * (HEIGHT + gap) * WIDTH * 3;

@@ -48,6 +48,14 @@ or Live takes the lights back.
 - Pads: the clip grid (Session) or the selected instrument (Note: drum pads,
   or a keyboard in A minor going up a fourth per row; Octave buttons shift
   it).
+- Steps (press Note again, or Layout): the selected slot as a stage
+  clip, one pad column per stage. The scene buttons pick what the pads
+  set: Pitch (two neighbouring pads for the semitone between), Octave,
+  Velocity, Gate (tap pulses; Select + pad sets the stage's length,
+  Shift + pad ties it), Chance (the bottom pad skips the stage) and Lock
+  amount. Hold stages and turn encoders to lock knobs on them; Delete
+  while holding clears their locks. An empty slot becomes a stage clip on
+  the first tap; Up/Down or Shift + scene button choose the slot.
 - Scene buttons right of the pads launch scenes; Stop stops every clip.
 - Buttons over the screen stop a track; buttons under it select one.
 - Encoders: the selected instrument's eight knobs (Device), or volume, pan
@@ -58,5 +66,6 @@ or Live takes the lights back.
 
 `opendj-studio --push-preview push.png` draws what the screen shows.
 Code: `src/push/` (`surface.rs` for the controls and lights, `display.rs`
-for the screen); the protocol is Ableton's Push 2 MIDI and Display
+and `ui/push.slint` for the screen, drawn by Slint's software renderer),
+`src/steps.rs` for stage clips; the protocol is Ableton's Push 2 MIDI and Display
 Interface Manual.

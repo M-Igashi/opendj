@@ -8,6 +8,7 @@ use crate::clip::{Sound, SCENES};
 use crate::control::{Controls, Mix};
 use crate::engine::SlotState;
 use crate::sound::{DRUM_NOTES, PARAMS};
+use crate::steps::{self, Layer, Stage, ROOT, SCALE};
 
 /// Ableton's SysEx header for Push 2.
 pub const SYSEX: [u8; 6] = [0xF0, 0x00, 0x21, 0x1D, 0x01, 0x01];
@@ -50,6 +51,9 @@ pub const DOWN: u8 = 47;
 pub const OCTAVE_DOWN: u8 = 54;
 pub const OCTAVE_UP: u8 = 55;
 pub const QUANTIZE: u8 = 116;
+pub const SELECT: u8 = 48;
+pub const DELETE: u8 = 118;
+pub const LAYOUT: u8 = 31;
 /// Scene buttons right of the pads, top (1/4) to bottom (1/32t).
 pub const SCENE_FIRST: u8 = 36;
 /// Buttons under the display, left to right.
@@ -138,6 +142,9 @@ pub enum Mode {
     Session,
     /// The selected track's instrument: drum pads or a keyboard in key.
     Note,
+    /// The selected stage clip: a column per stage, the scene buttons
+    /// pick what the pads set.
+    Steps,
 }
 
 /// What the eight encoders over the display turn.
@@ -178,10 +185,6 @@ impl Led {
     }
 }
 
-/// A minor: the demo set's key.
-const SCALE: [u8; 7] = [0, 2, 3, 5, 7, 8, 10];
-const ROOT: u8 = 9;
-
 pub struct Surface {
     pub mode: Mode,
     pub encoders: Encoders,
@@ -195,6 +198,13 @@ pub struct Surface {
     buttons: [Option<Led>; 128],
     /// The encoder a finger rests on.
     touched: Option<usize>,
+    pub layer: Layer,
+    select: bool,
+    /// Steps mode pads held down, by pad index.
+    down: u64,
+    /// Held pads already used (for locks or a semitone): their release
+    /// sets nothing.
+    used: u64,
 }
 
 impl Default for Surface {
@@ -214,7 +224,18 @@ impl Surface {
             pads: [None; 64],
             buttons: [None; 128],
             touched: None,
+            layer: Layer::Gate,
+            select: false,
+            down: 0,
+            used: 0,
         }
+    }
+
+    /// The stages (columns) held down in Steps mode, lowest first.
+    pub fn held_stages(&self) -> Vec<usize> {
+        (0..8)
+            .filter(|col| (0..8).any(|row| self.down & (1 << (row * 8 + col)) != 0))
+            .collect()
     }
 
     /// The encoder (0..8) a finger rests on, if any.
@@ -302,7 +323,41 @@ impl Surface {
                     c.note(track, pitch, velocity as f32 / 127.0);
                 }
             }
+            Mode::Steps => self.step_pad(index, velocity > 0, c),
         }
+    }
+
+    fn step_pad(&mut self, index: usize, down: bool, c: &Controls) {
+        let (row, col) = (index / 8, index % 8);
+        let bit = 1u64 << index;
+        let (t, s) = c.steps_slot();
+        if down {
+            self.down |= bit;
+            // Two neighbouring pitch pads: the semitone between.
+            if self.layer == Layer::Pitch {
+                let below = row > 0 && self.down & (bit >> 8) != 0;
+                let above = row < 7 && self.down & (bit << 8) != 0;
+                if below || above {
+                    let low = if below { row - 1 } else { row };
+                    c.edit_stages(t, s, |st| {
+                        let stage = &mut st.stages[col];
+                        stage.degree = low as u8;
+                        stage.sharp = true;
+                    });
+                    self.used |= bit | if below { bit >> 8 } else { bit << 8 };
+                }
+            }
+            return;
+        }
+        self.down &= !bit;
+        if self.used & bit != 0 {
+            self.used &= !bit;
+            return;
+        }
+        let (layer, select, shift) = (self.layer, self.select, self.shift);
+        c.edit_stages(t, s, |st| {
+            steps::press(&mut st.stages[col], layer, row as u8, select, shift)
+        });
     }
 
     /// The note pad (`row` from the bottom, `col`) plays on `track`.
@@ -331,6 +386,10 @@ impl Surface {
             self.shift = down;
             return;
         }
+        if cc == SELECT {
+            self.select = down;
+            return;
+        }
         if !down {
             return;
         }
@@ -339,7 +398,28 @@ impl Surface {
             PLAY => c.toggle_play(),
             STOP => c.stop_all(),
             SESSION => self.set_mode(Mode::Session, c),
-            NOTE => self.set_mode(Mode::Note, c),
+            // Again (or Layout): between the keyboard and the stages.
+            NOTE | LAYOUT => {
+                let next = match (cc, self.mode) {
+                    (_, Mode::Note) => Mode::Steps,
+                    (LAYOUT, Mode::Session) => Mode::Session,
+                    _ => Mode::Note,
+                };
+                self.set_mode(next, c);
+            }
+            DELETE => {
+                // Clears the held stages' locks.
+                let held = self.held_stages();
+                if !held.is_empty() {
+                    let (t, s) = c.steps_slot();
+                    c.edit_stages(t, s, |st| {
+                        for &i in &held {
+                            st.stages[i].locks = [None; PARAMS];
+                        }
+                    });
+                    self.used |= self.down;
+                }
+            }
             DEVICE => self.encoders = Encoders::Device,
             MIX => {
                 // Again: the next mixer control.
@@ -378,7 +458,11 @@ impl Surface {
             }
             cc if (SCENE_FIRST..SCENE_FIRST + 8).contains(&cc) => {
                 let scene = (cc - SCENE_FIRST) as usize;
-                if self.shift {
+                if self.mode == Mode::Steps && !self.shift {
+                    if let Some(&l) = Layer::ALL.get(scene) {
+                        self.layer = l;
+                    }
+                } else if self.shift {
                     c.select(c.selected_track(), Some(scene));
                 } else {
                     c.launch_scene(scene);
@@ -402,11 +486,15 @@ impl Surface {
 
     fn set_mode(&mut self, mode: Mode, c: &Controls) {
         self.end_notes(c);
+        self.down = 0;
+        self.used = 0;
         self.mode = mode;
     }
 
     fn set_track(&mut self, track: usize, c: &Controls) {
         self.end_notes(c);
+        self.down = 0;
+        self.used = 0;
         c.select_track(track);
     }
 
@@ -427,6 +515,22 @@ impl Surface {
             MASTER_ENCODER => c.set_main_volume(c.main_volume() + step),
             _ => {
                 let i = (cc - ENCODER_FIRST) as usize;
+                let held = self.held_stages();
+                if self.mode == Mode::Steps && !held.is_empty() {
+                    // Held stages: a lock on each, from where it was.
+                    if i < PARAMS {
+                        let (t, s) = c.steps_slot();
+                        let now = c.param(t, i);
+                        c.edit_stages(t, s, |st| {
+                            for &h in &held {
+                                let l = &mut st.stages[h].locks[i];
+                                *l = Some((l.unwrap_or(now) + step).clamp(0.0, 1.0));
+                            }
+                        });
+                    }
+                    self.used |= self.down;
+                    return;
+                }
                 match self.encoders {
                     Encoders::Device => {
                         if i < PARAMS {
@@ -448,8 +552,15 @@ impl Surface {
     /// sent.
     pub fn lights(&mut self, c: &Controls) -> Vec<[u8; 3]> {
         let mut out = Vec::new();
+        let stages = match self.mode {
+            Mode::Steps => {
+                let (t, s) = c.steps_slot();
+                c.stages(t, s)
+            }
+            _ => None,
+        };
         for index in 0..64 {
-            let led = self.pad_led(index, c);
+            let led = self.pad_led(index, c, stages.as_ref());
             if self.pads[index] != Some(led) {
                 self.pads[index] = Some(led);
                 send(&mut out, 0x90, PAD_FIRST + index as u8, led);
@@ -465,7 +576,7 @@ impl Surface {
         out
     }
 
-    fn pad_led(&self, index: usize, c: &Controls) -> Led {
+    fn pad_led(&self, index: usize, c: &Controls, stages: Option<&steps::Stages>) -> Led {
         let (row, col) = (index / 8, index % 8);
         let m = &c.monitor;
         match self.mode {
@@ -500,6 +611,17 @@ impl Surface {
                     Led::solid(SOFT)
                 }
             }
+            Mode::Steps => {
+                if self.down & (1 << index) != 0 {
+                    return Led::solid(GREEN);
+                }
+                let (t, s) = c.steps_slot();
+                let Some(st) = stages else {
+                    return Led::OFF;
+                };
+                let playing = m.slot(t, s) == SlotState::Playing && m.stage(t) == Some(col);
+                step_led(&st.stages[col], self.layer, row as u8, t, playing)
+            }
         }
     }
 
@@ -511,6 +633,15 @@ impl Surface {
         v.push((PLAY, Led::solid(if m.playing() { GREEN } else { GREY })));
         v.push((STOP, Led::solid(GREY)));
         for s in 0..8 {
+            if self.mode == Mode::Steps {
+                let led = match Layer::ALL.get(s) {
+                    Some(&l) if l == self.layer => Led::solid(WHITE),
+                    Some(_) => Led::solid(SOFT),
+                    None => Led::OFF,
+                };
+                v.push((SCENE_FIRST + s as u8, led));
+                continue;
+            }
             let playing = (0..tracks).any(|t| m.slot(t, s) == SlotState::Playing);
             let queued = (0..tracks).any(|t| m.slot(t, s) == SlotState::Queued);
             let any = (0..tracks).any(|t| c.has_clip(t, s));
@@ -546,7 +677,30 @@ impl Surface {
             v.push((UPPER_FIRST + t as u8, upper));
         }
         v.push((SESSION, white(self.mode == Mode::Session)));
-        v.push((NOTE, white(self.mode == Mode::Note)));
+        v.push((NOTE, white(matches!(self.mode, Mode::Note | Mode::Steps))));
+        let steps = self.mode == Mode::Steps;
+        v.push((
+            LAYOUT,
+            Led::solid(if steps || self.mode == Mode::Note {
+                W_DIM
+            } else {
+                W_OFF
+            }),
+        ));
+        v.push((
+            SELECT,
+            Led::solid(if self.select {
+                W_ON
+            } else if steps {
+                W_DIM
+            } else {
+                W_OFF
+            }),
+        ));
+        v.push((
+            DELETE,
+            Led::solid(if steps && self.down != 0 { W_ON } else { W_OFF }),
+        ));
         v.push((DEVICE, white(self.encoders == Encoders::Device)));
         v.push((MIX, white(matches!(self.encoders, Encoders::Mix(_)))));
         v.push((SHIFT, white(self.shift)));
@@ -574,6 +728,96 @@ impl Surface {
             out.push([0xB0, cc, 0]);
         }
         out
+    }
+}
+
+/// A Steps mode pad: `row` (from the bottom) of `stage` on `layer`.
+fn step_led(stage: &Stage, layer: Layer, row: u8, t: usize, playing: bool) -> Led {
+    let on = Led::solid(if playing { WHITE } else { track_color(t) });
+    let dim = Led::solid(track_dim(t));
+    // A bar up to `level` rows (1..=8).
+    let bar = |level: u8| {
+        if row + 1 == level {
+            on
+        } else if row + 1 < level {
+            dim
+        } else {
+            Led::OFF
+        }
+    };
+    if stage.skip && layer != Layer::Chance {
+        return if row == 0 {
+            Led::solid(RED_DIM)
+        } else {
+            Led::OFF
+        };
+    }
+    match layer {
+        Layer::Pitch => {
+            if row == stage.degree {
+                if stage.sharp {
+                    Led::solid(AMBER)
+                } else {
+                    on
+                }
+            } else if stage.sharp && row == stage.degree + 1 {
+                Led::solid(AMBER)
+            } else {
+                Led::OFF
+            }
+        }
+        Layer::Octave => {
+            let at = (stage.octave + 3).clamp(0, 7) as u8;
+            if row == at {
+                on
+            } else if row == 3 {
+                Led::solid(GREY)
+            } else {
+                Led::OFF
+            }
+        }
+        Layer::Velocity => bar((stage.velocity * 8.0).round().clamp(1.0, 8.0) as u8),
+        Layer::Gate => {
+            if row >= stage.pulses {
+                Led::OFF
+            } else if stage.gate(row)
+                || (stage.tie && stage.gates != 0 && row > stage.gates.trailing_zeros() as u8)
+            {
+                if stage.tie && !stage.gate(row) {
+                    dim
+                } else {
+                    on
+                }
+            } else {
+                Led::solid(GREY)
+            }
+        }
+        Layer::Chance => {
+            if row == 0 {
+                Led::solid(if stage.skip { RED } else { GREY })
+            } else if stage.skip {
+                Led::OFF
+            } else {
+                let level = (stage.chance * 7.0).round() as u8 + 1;
+                bar(level)
+            }
+        }
+        Layer::Locks => {
+            let level = (stage.lock_amount * 7.0).round() as u8 + 1;
+            if !stage.has_locks() {
+                if row < level {
+                    Led::solid(GREY)
+                } else {
+                    Led::OFF
+                }
+            } else if row + 1 == level {
+                Led::solid(if playing { track_color(t) } else { WHITE })
+            } else if row + 1 < level {
+                Led::solid(SOFT)
+            } else {
+                Led::OFF
+            }
+        }
     }
 }
 
@@ -724,5 +968,61 @@ mod tests {
             &[0x03, 64, 0x7F, 1, 0x0A, 1, 101, 0, 0x24, 1]
         );
         assert_eq!(user_mode(), vec![0xF0, 0, 0x21, 0x1D, 1, 1, 0x0A, 1, 0xF7]);
+    }
+
+    #[test]
+    fn steps_mode_edits_and_locks() {
+        let (c, _rx) = controls();
+        let mut s = Surface::new();
+        let press = |s: &mut Surface, cc: u8| {
+            s.input(&[0xB0, cc, 127], &c);
+            s.input(&[0xB0, cc, 0], &c);
+        };
+        let pad = |s: &mut Surface, row: u8, col: u8, down: bool| {
+            s.input(
+                &[0x90, PAD_FIRST + row * 8 + col, if down { 100 } else { 0 }],
+                &c,
+            );
+        };
+        // Lead (track 3), scene 8 is empty: Steps makes a clip there.
+        press(&mut s, LOWER_FIRST + 3);
+        s.input(&[0xB0, SHIFT, 127], &c);
+        press(&mut s, SCENE_FIRST + 7);
+        s.input(&[0xB0, SHIFT, 0], &c);
+        press(&mut s, NOTE);
+        press(&mut s, NOTE);
+        assert_eq!(s.mode, Mode::Steps);
+        assert!(!c.has_clip(3, 7));
+        press(&mut s, SCENE_FIRST + 3);
+        assert_eq!(s.layer, Layer::Gate);
+        pad(&mut s, 2, 0, true);
+        pad(&mut s, 2, 0, false);
+        let st = c.stages(3, 7).expect("stage clip");
+        assert_eq!((st.stages[0].pulses, st.stages[0].gates), (3, 0b100));
+        assert!(c.has_clip(3, 7));
+        // Hold stage 2 and turn the first encoder: a lock, and the release
+        // sets nothing.
+        pad(&mut s, 0, 1, true);
+        s.input(&[0xB0, ENCODER_FIRST, 10], &c);
+        pad(&mut s, 0, 1, false);
+        let st = c.stages(3, 7).unwrap();
+        let base = c.param(3, 0);
+        assert!((st.stages[1].locks[0].unwrap() - (base + 0.05)).abs() < 1e-4);
+        assert_eq!(st.stages[1].gates, 0);
+        // Hold and Delete clears it.
+        pad(&mut s, 0, 1, true);
+        press(&mut s, DELETE);
+        pad(&mut s, 0, 1, false);
+        assert!(!c.stages(3, 7).unwrap().stages[1].has_locks());
+        // A note clip isn't touched.
+        s.input(&[0xB0, SHIFT, 127], &c);
+        press(&mut s, SCENE_FIRST + 3);
+        s.input(&[0xB0, SHIFT, 0], &c);
+        assert!(c.stages(3, 3).is_none());
+        pad(&mut s, 0, 0, true);
+        pad(&mut s, 0, 0, false);
+        assert!(c.stages(3, 3).is_none());
+        let lights = s.lights(&c);
+        assert!(lights.contains(&[0x90, PAD_FIRST, 0]));
     }
 }

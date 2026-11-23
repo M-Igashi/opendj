@@ -25,8 +25,8 @@
 use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, AtomicU8, Ordering};
 use std::sync::Arc;
 
-use crate::clip::{Clip, Sound, Track, SCENES, TRACKS};
-use crate::sound::{self, Drums, Instrument, Synth};
+use crate::clip::{Clip, Lock, Sound, Track, SCENES, TRACKS};
+use crate::sound::{self, Drums, Instrument, Synth, PARAMS};
 
 /// Beats in a bar; also the Link quantum, so bars line up with openDJ's.
 pub const QUANTUM: f64 = 4.0;
@@ -152,6 +152,8 @@ pub struct Monitor {
     slots: [AtomicU8; TRACKS * SCENES],
     progress: [AtomicU32; TRACKS],
     stopping: [AtomicBool; TRACKS],
+    /// The stage each track's stage clip is on, 255 for none.
+    stages: [AtomicU8; TRACKS],
     /// Each track's peak since the UI last read it, after its fader.
     peaks: [AtomicU32; TRACKS],
     /// The main output's peak since the UI last read it.
@@ -169,6 +171,7 @@ impl Monitor {
             slots: std::array::from_fn(|_| AtomicU8::new(0)),
             progress: std::array::from_fn(|_| AtomicU32::new((-1f32).to_bits())),
             stopping: std::array::from_fn(|_| AtomicBool::new(false)),
+            stages: std::array::from_fn(|_| AtomicU8::new(255)),
             peaks: std::array::from_fn(|_| AtomicU32::new(0)),
             main_peak: AtomicU32::new(0),
             load: AtomicU32::new(0),
@@ -203,6 +206,14 @@ impl Monitor {
 
     pub fn stopping(&self, track: usize) -> bool {
         self.stopping[track].load(Ordering::Relaxed)
+    }
+
+    /// The stage `track`'s stage clip is playing.
+    pub fn stage(&self, track: usize) -> Option<usize> {
+        match self.stages.get(track)?.load(Ordering::Relaxed) {
+            255 => None,
+            s => Some(s as usize),
+        }
     }
 
     /// `track`'s peak since the last call, and starts a new one.
@@ -313,6 +324,52 @@ struct Column {
     gain: f32,
     /// Left and right gains from the pan knob.
     pan: [f32; 2],
+    /// The instrument's knobs as the track has them, under any lock.
+    base: [f32; PARAMS],
+    /// Knobs a stage clip has locked away from `base`, by bit.
+    locked: u16,
+    /// For notes that play by chance.
+    rng: u32,
+}
+
+impl Column {
+    /// Puts locked knobs back where the track has them.
+    fn unlock(&mut self) {
+        for i in 0..PARAMS {
+            if self.locked & (1 << i) != 0 {
+                self.instrument.set_param(i, self.base[i]);
+            }
+        }
+        self.locked = 0;
+    }
+
+    fn lock(&mut self, lock: &Lock) {
+        for i in 0..PARAMS {
+            match lock.values[i] {
+                Some(v) => {
+                    let b = self.base[i];
+                    self.instrument.set_param(i, b + (v - b) * lock.amount);
+                    self.locked |= 1 << i;
+                }
+                None if self.locked & (1 << i) != 0 => {
+                    self.instrument.set_param(i, self.base[i]);
+                    self.locked &= !(1 << i);
+                }
+                None => {}
+            }
+        }
+    }
+
+    /// 0..1, for a note's chance.
+    fn roll(&mut self) -> f32 {
+        // xorshift32
+        let mut x = self.rng;
+        x ^= x << 13;
+        x ^= x >> 17;
+        x ^= x << 5;
+        self.rng = x;
+        (x >> 8) as f32 / (1u32 << 24) as f32
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -320,6 +377,10 @@ enum Kind {
     Off(u8),
     On(u8, f32),
     AllOff,
+    /// The clip's lock point by index.
+    Lock(u16),
+    /// Locked knobs go back (a clip switch).
+    Unlock,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -377,13 +438,17 @@ impl Engine {
     ) -> Engine {
         let columns = tracks
             .iter()
-            .map(|t| Column {
+            .enumerate()
+            .map(|(i, t)| Column {
                 playing: None,
                 pending: None,
                 held: [Held { pitch: 0, off: 0.0 }; MAX_HELD],
                 held_len: 0,
                 gain: 1.0,
                 pan: [1.0, 1.0],
+                base: sound::default_params(t.sound),
+                locked: 0,
+                rng: 0x9E37_79B9 ^ (i as u32 + 1).wrapping_mul(0x85EB_CA6B),
                 instrument: match t.sound {
                     Sound::Drums(kit) => Instrument::Drums(Box::new(Drums::new(kit, rate, 0.45))),
                     Sound::Bass => Instrument::Synth(Box::new(Synth::new(sound::BASS, rate))),
@@ -469,6 +534,7 @@ impl Engine {
                         c.pending = None;
                         c.held_len = 0;
                         c.instrument.all_off();
+                        c.unlock();
                     }
                     Some(ClockChange::Stop)
                 }
@@ -496,7 +562,13 @@ impl Engine {
                 value,
             } => {
                 if let Some(c) = self.columns.get_mut(track) {
-                    c.instrument.set_param(index, value);
+                    if index < PARAMS {
+                        c.base[index] = value;
+                        // A locked knob takes it when the lock lets go.
+                        if c.locked & (1 << index) == 0 {
+                            c.instrument.set_param(index, value);
+                        }
+                    }
                 }
                 None
             }
@@ -611,11 +683,21 @@ impl Engine {
                     self.columns[t].instrument.render(&mut scratch[done..at]);
                     done = at;
                 }
-                let inst = &mut self.columns[t].instrument;
+                let col = &mut self.columns[t];
                 match e.kind {
-                    Kind::On(p, v) => inst.note_on(p, v),
-                    Kind::Off(p) => inst.note_off(p),
-                    Kind::AllOff => inst.all_off(),
+                    Kind::On(p, v) => col.instrument.note_on(p, v),
+                    Kind::Off(p) => col.instrument.note_off(p),
+                    Kind::AllOff => col.instrument.all_off(),
+                    Kind::Unlock => col.unlock(),
+                    Kind::Lock(i) => {
+                        let lock = self
+                            .program
+                            .clip(t, e.scene as usize)
+                            .and_then(|c| c.locks.get(i as usize));
+                        if let Some(lock) = lock {
+                            col.lock(lock);
+                        }
+                    }
                 }
                 if let (Some(log), Kind::On(p, _) | Kind::Off(p)) = (&mut self.log, e.kind) {
                     if log.len() < log.capacity() {
@@ -673,6 +755,7 @@ impl Engine {
                 }
                 c.held_len = 0;
                 push(&mut self.events, at, Kind::AllOff, 255);
+                push(&mut self.events, at, Kind::Unlock, 255);
                 c.playing = p.scene.map(|s| (s, at));
                 c.pending = None;
                 from = at;
@@ -715,6 +798,15 @@ impl Engine {
         let last = ((hi - launched) / clip.beats).floor() as i64;
         for k in first..=last {
             let base = launched + k as f64 * clip.beats;
+            for (i, l) in clip.locks.iter().enumerate() {
+                let at = base + l.start;
+                if at >= hi {
+                    break;
+                }
+                if at >= lo {
+                    push(&mut self.events, at, Kind::Lock(i as u16), scene as u8);
+                }
+            }
             for n in &clip.notes {
                 let on = base + n.start;
                 if on < lo {
@@ -722,6 +814,9 @@ impl Engine {
                 }
                 if on >= hi {
                     break;
+                }
+                if n.chance < 1.0 && c.roll() >= n.chance {
+                    continue;
                 }
                 // Notes are cut at the loop's end.
                 let off = on + n.length.min(clip.beats - n.start);
@@ -772,6 +867,19 @@ impl Engine {
                 None => -1.0,
             };
             m.progress[t].store(progress.to_bits(), Ordering::Relaxed);
+            let stage = c
+                .playing
+                .and_then(|(s, at)| {
+                    let clip = self.program.clip(t, s)?;
+                    let pos = (beat - at).max(0.0).rem_euclid(clip.beats.max(1e-9));
+                    clip.stage_starts
+                        .iter()
+                        .rev()
+                        .find(|(start, _)| *start <= pos)
+                        .map(|(_, i)| *i)
+                })
+                .unwrap_or(255);
+            m.stages[t].store(stage, Ordering::Relaxed);
             m.stopping[t].store(
                 c.pending.is_some_and(|p| p.scene.is_none()),
                 Ordering::Relaxed,
@@ -802,8 +910,9 @@ fn push(events: &mut Vec<Event>, beat: f64, kind: Kind, scene: u8) {
 fn order(kind: Kind) -> u8 {
     match kind {
         Kind::Off(_) => 0,
-        Kind::AllOff => 1,
-        Kind::On(..) => 2,
+        Kind::AllOff | Kind::Unlock => 1,
+        Kind::Lock(_) => 2,
+        Kind::On(..) => 3,
     }
 }
 
@@ -846,7 +955,8 @@ impl Studio {
     pub fn new(tracks: &[Track], rate: f64, tempo: f64) -> (Studio, Remote) {
         let monitor = Arc::new(Monitor::new());
         let (cmd_tx, cmd_rx) = rtrb::RingBuffer::new(256);
-        let (trash_tx, trash_rx) = rtrb::RingBuffer::new(8);
+        // Room for a burst of edits from Push between UI timer ticks.
+        let (trash_tx, trash_rx) = rtrb::RingBuffer::new(64);
         let engine = Engine::new(tracks, rate, monitor.clone(), trash_tx);
         let mut clock = Clock::new(rate, tempo);
         clock.set_tempo(tempo);
@@ -964,6 +1074,7 @@ mod tests {
                     length: 0.5,
                     pitch,
                     velocity: 1.0,
+                    chance: 1.0,
                 }],
             ))
         };
@@ -1113,5 +1224,36 @@ mod tests {
         run(&mut s, 2);
         assert!(r.trash.pop().is_ok(), "old program came back");
         assert!(r.monitor.stopping(0));
+    }
+
+    #[test]
+    fn stage_clips_lock_knobs_and_play_by_chance() {
+        use crate::steps::{Stages, STAGES};
+        let mut st = Stages::default();
+        for s in st.stages.iter_mut() {
+            s.gates = 1;
+        }
+        st.stages[1].locks[0] = Some(1.0);
+        st.stages[2].chance = 0.0;
+        let mut set = one_note_set();
+        set[0].slots[0] = Some(st.clip("Steps", set[0].sound));
+        let (mut studio, mut r) = Studio::new(&set, 48_000.0, 120.0);
+        studio.engine.keep_log(256);
+        r.commands.push(Command::Launch { track: 0, scene: 0 }).ok();
+        // Half a beat per stage at 120 BPM: into the last stage, once.
+        run(
+            &mut studio,
+            (3.75 * frames_per_beat(120.0) / BLOCK as f64) as usize,
+        );
+        let ons = studio
+            .engine
+            .log()
+            .iter()
+            .filter(|l| l.on && l.track == 0)
+            .count();
+        // Every stage but the one at chance 0.
+        assert_eq!(ons, STAGES - 1);
+        let c = &studio.engine.columns[0];
+        assert_eq!(c.locked, 0, "the lock let go after stage 2");
     }
 }

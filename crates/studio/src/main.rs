@@ -18,6 +18,7 @@ mod engine;
 mod link;
 mod push;
 mod sound;
+mod steps;
 
 use std::cell::RefCell;
 use std::rc::Rc;
@@ -289,6 +290,22 @@ fn ui(
             let changed = version != seen;
             seen = version;
             if changed {
+                // Clips Push made or changed in Steps mode.
+                for i in 0..slots.row_count() {
+                    let (t, sc) = (i % TRACKS, i / TRACKS);
+                    let info = controls.clip_info(t, sc);
+                    if let Some(mut row) = slots.row_data(i) {
+                        let name: SharedString = info
+                            .as_ref()
+                            .map_or(SharedString::new(), |(n, _)| n.as_str().into());
+                        let beats = info.as_ref().map_or(0.0, |(_, b)| *b as f32);
+                        if row.name != name || row.beats != beats {
+                            row.name = name;
+                            row.beats = beats;
+                            slots.set_row_data(i, row);
+                        }
+                    }
+                }
                 w.set_selected_track(controls.selected_track() as i32);
                 w.set_selected_scene(controls.selected_scene().map_or(-1, |s| s as i32));
                 w.set_main_volume(controls.main_volume());

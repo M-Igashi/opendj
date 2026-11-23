@@ -1,6 +1,7 @@
 //! MIDI clips and the demo set the test app opens with.
 
-use crate::sound::{CLAP, CLOSED_HAT, KICK, OPEN_HAT, RIM, SNARE};
+use crate::sound::{CLAP, CLOSED_HAT, KICK, OPEN_HAT, PARAMS, RIM, SNARE};
+use crate::steps::{self, Layer, Stages};
 
 /// A note in a clip, in beats from the clip's start.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -9,6 +10,18 @@ pub struct Note {
     pub length: f64,
     pub pitch: u8,
     pub velocity: f32,
+    /// The chance it plays each time round, 0..1.
+    pub chance: f32,
+}
+
+/// Where a stage clip sets the instrument's knobs: each lock or, for
+/// `None`, the knob as the track has it.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Lock {
+    pub start: f64,
+    pub values: [Option<f32>; PARAMS],
+    /// How far towards the locked values, 0..1.
+    pub amount: f32,
 }
 
 /// A looping MIDI clip.
@@ -19,6 +32,12 @@ pub struct Clip {
     pub beats: f64,
     /// Sorted by start.
     pub notes: Vec<Note>,
+    /// Knob changes by stage (stage clips only), sorted by start.
+    pub locks: Vec<Lock>,
+    /// Where each stage starts and which it is (stage clips only).
+    pub stage_starts: Vec<(f64, u8)>,
+    /// What it was made from, when it is a stage clip.
+    pub stages: Option<Box<Stages>>,
 }
 
 impl Clip {
@@ -29,6 +48,9 @@ impl Clip {
             name: name.to_string(),
             beats,
             notes,
+            locks: Vec::new(),
+            stage_starts: Vec::new(),
+            stages: None,
         }
     }
 }
@@ -60,6 +82,7 @@ fn n(start: f64, length: f64, pitch: u8, velocity: f32) -> Note {
         length,
         pitch,
         velocity,
+        chance: 1.0,
     }
 }
 
@@ -109,6 +132,17 @@ const AM: &[u8] = &[57, 60, 64];
 const F: &[u8] = &[53, 57, 60];
 const C: &[u8] = &[55, 60, 64];
 const G: &[u8] = &[55, 59, 62];
+
+/// A stage clip from (degree, gates) per stage, two pulses each.
+fn stages(name: &str, sound: Sound, rows: [(u8, u8); 8], tweak: impl Fn(&mut Stages)) -> Clip {
+    let mut s = Stages::default();
+    for (stage, (degree, gates)) in s.stages.iter_mut().zip(rows) {
+        steps::press(stage, Layer::Pitch, degree, false, false);
+        stage.gates = gates;
+    }
+    tweak(&mut s);
+    s.clip(name, sound)
+}
 
 /// Four tracks of eight scenes in A minor at 124 BPM: drums, bass, chords,
 /// lead.
@@ -163,7 +197,21 @@ pub fn demo_set() -> Vec<Track> {
                 (CLOSED_HAT, "x-x-x-x---------"),
             ],
         )),
-        None,
+        Some(stages(
+            "Steps",
+            Sound::Drums("Punch"),
+            [
+                (0, 1),
+                (2, 1),
+                (1, 1),
+                (2, 3),
+                (0, 1),
+                (2, 1),
+                (1, 1),
+                (3, 1),
+            ],
+            |s| s.stages[3].chance = 0.6,
+        )),
     ];
     // Bass, two bars, roots of Am F C G.
     let roots = [45u8, 41, 48, 43];
@@ -177,7 +225,25 @@ pub fn demo_set() -> Vec<Track> {
         line(name, 16.0, 0.9, &notes)
     };
     let bass_col = vec![
-        None,
+        Some(stages(
+            "Steps",
+            Sound::Bass,
+            [
+                (0, 1),
+                (0, 2),
+                (4, 1),
+                (3, 3),
+                (0, 1),
+                (6, 2),
+                (5, 1),
+                (4, 1),
+            ],
+            |s| {
+                // The cutoff opens on the sixth stage.
+                s.stages[5].locks[0] = Some(0.75);
+                s.stages[3].tie = true;
+            },
+        )),
         Some(per_beat("Roots", &[(0.0, 3.5, 0)])),
         Some(per_beat(
             "Offbeat",

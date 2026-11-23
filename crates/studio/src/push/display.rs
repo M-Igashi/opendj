@@ -157,7 +157,7 @@ pub struct Renderer {
     knobs: Rc<VecModel<PushKnob>>,
     frame: Frame,
     /// The page last shown, to flash its name when it changes.
-    page: Option<(Mode, Encoders)>,
+    page: Option<(Mode, Encoders, crate::steps::Layer)>,
     toast_until: Option<Instant>,
 }
 
@@ -201,7 +201,38 @@ impl Renderer {
             .collect();
         set_rows(&self.tracks, tracks);
 
+        // Steps mode with stages held: the knobs show (and set) their locks.
+        let (st, sc) = c.steps_slot();
+        let stages = if surface.mode == Mode::Steps {
+            c.stages(st, sc)
+        } else {
+            None
+        };
+        let held = surface.held_stages();
+        let lock_view = stages.as_ref().zip(held.first());
         let knobs: Vec<PushKnob> = match surface.encoders {
+            _ if lock_view.is_some() => {
+                let (stages, &h) = lock_view.expect("checked");
+                let stage = &stages.stages[h];
+                (0..PARAMS)
+                    .map(|i| {
+                        let lock = stage.locks[i];
+                        let v = lock.unwrap_or_else(|| c.param(st, i));
+                        PushKnob {
+                            name: c.param_name(st, i).into(),
+                            text: c.param_text_at(st, i, v).into(),
+                            value: v,
+                            bipolar: false,
+                            // Locked knobs in white.
+                            color: if lock.is_some() {
+                                color(0xffffff)
+                            } else {
+                                color(0x5a5d62)
+                            },
+                        }
+                    })
+                    .collect()
+            }
             Encoders::Device => {
                 let rgb = color(c.tracks[selected].color);
                 (0..PARAMS)
@@ -255,12 +286,31 @@ impl Renderer {
         set_rows(&self.knobs, knobs);
 
         let name = &c.tracks[selected].name;
+        let clip_name = c
+            .clip_info(st, sc)
+            .map_or_else(|| "new".to_string(), |(n, _)| n);
         let title = match (surface.mode, surface.encoders) {
             (Mode::Note, _) => format!("Note · {name}"),
+            (Mode::Steps, _) if stages.is_none() => {
+                format!("Steps · {name} {} holds notes: pick another scene", sc + 1)
+            }
+            (Mode::Steps, _) if !held.is_empty() => format!(
+                "Locks · stage {} · {name} {}",
+                held.iter()
+                    .map(|h| (h + 1).to_string())
+                    .collect::<Vec<_>>()
+                    .join("+"),
+                sc + 1
+            ),
+            (Mode::Steps, _) => format!(
+                "Steps · {} · {name} {} {clip_name}",
+                surface.layer.label(),
+                sc + 1
+            ),
             (_, Encoders::Device) => format!("Device · {name}"),
             (_, Encoders::Mix(mix)) => format!("Mix · {}", mix.label()),
         };
-        let page = (surface.mode, surface.encoders);
+        let page = (surface.mode, surface.encoders, surface.layer);
         if self.page.is_some_and(|p| p != page) {
             self.ui.set_toast(title.as_str().into());
             self.ui.set_toast_visible(true);

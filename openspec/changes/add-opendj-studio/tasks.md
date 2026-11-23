@@ -20,6 +20,8 @@
 - [ ] 2.6 Novation Launchpad X in Programmer mode
 - [x] 2.7 Push screen drawn with Slint's software renderer on the Push thread: knob arcs, track tabs with clip progress, page toasts, animated
 - [ ] 2.8 Try the Slint-drawn Push screen on hardware (macOS)
+- [x] 2.9 Steps pad mode on Push: stage clips (pitch, octave, velocity, gate, chance, lock amount) with parameter locks
+- [ ] 2.10 Try Steps mode on hardware (macOS)
 
 ## 3. Clip editing
 

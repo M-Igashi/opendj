@@ -35,3 +35,10 @@ openDJ Studio SHALL use an Ableton Push 2 without Ableton Live running: it SHALL
 #### Scenario: Turning a knob on Push
 - **WHEN** the Bass track is selected and the first encoder is turned right
 - **THEN** the bass synth's cutoff rises, and the window and Push's screen show the new value
+
+### Requirement: Stage sequencer on Push 2
+openDJ Studio SHALL offer a Steps pad mode on Push 2 that edits the selected slot as a stage clip of eight stages, one per pad column. The scene buttons SHALL pick the layer the pads set: pitch (in key, or a drum sound), octave, velocity, gate (pulses, stage length and ties), chance (including skipping the stage) and lock amount. Holding stage pads and turning an encoder SHALL lock that knob to a value on those stages only; the knob SHALL return to the track's value on stages without a lock. An empty slot SHALL become a stage clip when edited; a note clip SHALL NOT be changed.
+
+#### Scenario: Locking a knob on a stage
+- **WHEN** a stage clip plays and stage 6's pad is held while the first encoder turns right
+- **THEN** the cutoff opens on stage 6 only, Push's screen shows the locked value in white, and the other stages keep the track's cutoff

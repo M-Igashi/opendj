@@ -6,9 +6,10 @@
 use std::sync::atomic::{AtomicI32, AtomicU32, AtomicU64, AtomicU8, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 
-use crate::clip::{Sound, Track, SCENES, TRACKS};
-use crate::engine::{Command, Monitor, Quantize};
+use crate::clip::{Clip, Sound, Track, SCENES, TRACKS};
+use crate::engine::{Command, Monitor, Program, Quantize};
 use crate::sound::{self, PARAMS};
+use crate::steps::Stages;
 
 /// Where a fader sits for 0 dB: positions run -inf..+6 dB, 66 dB over the
 /// travel.
@@ -94,8 +95,8 @@ pub struct Controls {
     commands: Mutex<rtrb::Producer<Command>>,
     pub monitor: Arc<Monitor>,
     pub tracks: Vec<TrackInfo>,
-    /// Which slots hold a clip, scene-major.
-    clips: [bool; TRACKS * SCENES],
+    /// The clips, as last sent to the audio thread.
+    set: Mutex<Vec<Track>>,
     mix: [[AtomicU32; 4]; TRACKS],
     main: AtomicU32,
     params: [[AtomicU32; PARAMS]; TRACKS],
@@ -128,17 +129,11 @@ impl Controls {
                 .map_or([0.5; PARAMS], |tr| sound::default_params(tr.sound));
             std::array::from_fn(|i| AtomicU32::new(defaults[i].to_bits()))
         });
-        let mut clips = [false; TRACKS * SCENES];
-        for (t, track) in set.iter().enumerate().take(TRACKS) {
-            for (s, slot) in track.slots.iter().enumerate().take(SCENES) {
-                clips[s * TRACKS + t] = slot.is_some();
-            }
-        }
         Controls {
             commands: Mutex::new(commands),
             monitor,
             tracks,
-            clips,
+            set: Mutex::new(set.to_vec()),
             mix: std::array::from_fn(|_| {
                 let [v, p, a, b]: [AtomicU32; 4] = floats(0.0);
                 store(&v, UNITY);
@@ -169,8 +164,74 @@ impl Controls {
         self.version.load(Ordering::Relaxed)
     }
 
+    fn with_clip<R>(&self, track: usize, scene: usize, f: impl FnOnce(&Clip) -> R) -> Option<R> {
+        let set = self.set.lock().ok()?;
+        set.get(track)?.slots.get(scene)?.as_ref().map(f)
+    }
+
     pub fn has_clip(&self, track: usize, scene: usize) -> bool {
-        track < TRACKS && scene < SCENES && self.clips[scene * TRACKS + track]
+        self.with_clip(track, scene, |_| ()).is_some()
+    }
+
+    /// A clip's name and length in beats.
+    pub fn clip_info(&self, track: usize, scene: usize) -> Option<(String, f64)> {
+        self.with_clip(track, scene, |c| (c.name.clone(), c.beats))
+    }
+
+    // ---------------------------------------------------------- stages
+
+    /// The slot Steps mode edits: the selected track's selected scene, or
+    /// the scene it is playing, or the first.
+    pub fn steps_slot(&self) -> (usize, usize) {
+        let t = self.selected_track();
+        let s = self.selected_scene().unwrap_or_else(|| {
+            (0..SCENES)
+                .find(|&s| self.monitor.slot(t, s) == crate::engine::SlotState::Playing)
+                .unwrap_or(0)
+        });
+        (t, s)
+    }
+
+    /// The stage clip in a slot: None when the slot holds a note clip,
+    /// a fresh one when it is empty.
+    pub fn stages(&self, track: usize, scene: usize) -> Option<Stages> {
+        let set = self.set.lock().ok()?;
+        match set.get(track)?.slots.get(scene)? {
+            None => Some(Stages::default()),
+            Some(c) => c.stages.as_deref().cloned(),
+        }
+    }
+
+    /// Changes the stage clip in a slot (making one in an empty slot) and
+    /// sends the set to the audio thread. False for a note clip.
+    pub fn edit_stages(&self, track: usize, scene: usize, f: impl FnOnce(&mut Stages)) -> bool {
+        let Ok(mut set) = self.set.lock() else {
+            return false;
+        };
+        let Some(tr) = set.get_mut(track) else {
+            return false;
+        };
+        let sound = tr.sound;
+        let Some(slot) = tr.slots.get_mut(scene) else {
+            return false;
+        };
+        let (mut stages, name) = match slot {
+            None => (Stages::default(), "Steps".to_string()),
+            Some(c) => match c.stages.as_deref() {
+                Some(s) => (s.clone(), c.name.clone()),
+                None => return false,
+            },
+        };
+        let before = stages.clone();
+        f(&mut stages);
+        if slot.is_some() && stages == before {
+            return true;
+        }
+        *slot = Some(stages.clip(&name, sound));
+        self.send(Command::Program(Program::compile(&set)));
+        drop(set);
+        self.bump();
+        true
     }
 
     // ------------------------------------------------------- launching
@@ -320,6 +381,12 @@ impl Controls {
             value: v,
         });
         self.bump();
+    }
+
+    /// Knob `index` of `track` at `value`, as text.
+    pub fn param_text_at(&self, track: usize, index: usize, value: f32) -> String {
+        let drums = self.tracks.get(track).is_some_and(|t| t.drums());
+        sound::param_text(drums, index, value)
     }
 
     /// Knob `index` of `track` as text.
