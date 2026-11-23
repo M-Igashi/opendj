@@ -4881,6 +4881,19 @@ impl Browser {
         }
     }
 
+    /// Whether the folder picked in the tree (or Jam's tree) is open.
+    fn picked_folder_open(&self, app: &AppWindow) -> bool {
+        if app.global::<StoreUi>().get_source() == INSTRUMENTS {
+            let ui = app.global::<crate::InstrumentsUi>();
+            return usize::try_from(ui.get_current_node())
+                .ok()
+                .and_then(|i| ui.get_nodes().row_data(i))
+                .is_some_and(|n| n.children == 2);
+        }
+        self.visible_nodes.contains(&self.current_node)
+            && self.navigation_row(self.current_node).children == 2
+    }
+
     /// Acts on library controls set by controller mappings: browsing,
     /// switching between folders and tracks, loading. Called every frame.
     pub fn poll_controllers(&mut self, app: &AppWindow) {
@@ -4907,10 +4920,11 @@ impl Browser {
         }
         for _ in 0..backward.max(0) {
             // A Shift+press steps left, as ← does, except in the folders:
-            // there it goes straight to the rail instead of up one folder at
-            // a time, since turning the knob already reaches the parents.
+            // it closes an open folder, and otherwise goes straight to the
+            // rail instead of up one folder at a time, since turning the
+            // knob already reaches the parents.
             let focus = app.global::<BrowserFocus>();
-            if focus.get_pane() == BrowserPane::Folders {
+            if focus.get_pane() == BrowserPane::Folders && !self.picked_folder_open(app) {
                 focus.invoke_focus(BrowserPane::Sources);
             } else {
                 self.navigate_browser(2, 1);
