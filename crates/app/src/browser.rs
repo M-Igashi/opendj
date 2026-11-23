@@ -626,6 +626,9 @@ pub struct Browser {
     lib: LibraryControls,
     /// Moving the selection with a controller goes through folders instead of tracks.
     folders_focused: bool,
+    /// The rail entry the knob or ↑ ↓ moved to (-1 Collection Health), and
+    /// when: it opens once the moves stop (see `navigation::RAIL_SETTLE`).
+    rail_pending: Option<(i32, std::time::Instant)>,
     /// Tracks loaded with LoadSelectedTrackAndPlay, to start once they arrive.
     play_when_loaded: [Option<usize>; NUM_DECKS],
     /// The streaming services, in the order of [`STREAMS`].
@@ -1361,6 +1364,7 @@ impl Browser {
             key_rules: (key::Mixing::Harmonic, 1),
             lib: LibraryControls::create(registry),
             folders_focused: false,
+            rail_pending: None,
             play_when_loaded: [None; NUM_DECKS],
             streams: STREAMS
                 .iter()
@@ -4880,6 +4884,7 @@ impl Browser {
     /// Acts on library controls set by controller mappings: browsing,
     /// switching between folders and tracks, loading. Called every frame.
     pub fn poll_controllers(&mut self, app: &AppWindow) {
+        self.settle_rail(false);
         if take(&self.lib.show_linked) > 0.0 {
             app.set_side_panel_visible(true);
             app.set_side_tab(LINKED_TAB as i32);
