@@ -339,7 +339,7 @@ impl Engine {
                 held: [Held { pitch: 0, off: 0.0 }; MAX_HELD],
                 held_len: 0,
                 instrument: match t.sound {
-                    Sound::Drums(kit) => Instrument::Drums(Drums::new(kit, rate, 0.45)),
+                    Sound::Drums(kit) => Instrument::Drums(Box::new(Drums::new(kit, rate, 0.45))),
                     Sound::Bass => Instrument::Synth(Box::new(Synth::new(sound::BASS, rate))),
                     Sound::Pad => Instrument::Synth(Box::new(Synth::new(sound::PAD, rate))),
                     Sound::Lead => Instrument::Synth(Box::new(Synth::new(sound::LEAD, rate))),

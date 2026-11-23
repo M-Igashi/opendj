@@ -13,7 +13,7 @@ use opendj_engine::sampler::Sample;
 
 /// A track's instrument.
 pub enum Instrument {
-    Drums(Drums),
+    Drums(Box<Drums>),
     Synth(Box<Synth>),
 }
 
@@ -103,7 +103,7 @@ impl Drums {
             let open = DRUM_NOTES.iter().position(|&n| n == OPEN_HAT);
             for v in self.voices.iter_mut().filter(|v| v.active) {
                 if Some(v.sound) == open {
-                    v.fade = v.fade.min(1.0).max(0.999);
+                    v.fade = v.fade.clamp(0.999, 1.0);
                 }
             }
         }
@@ -390,7 +390,7 @@ impl Synth {
                     }
                 }
                 let amp = v.level * v.velocity * p.gain;
-                for c in 0..2 {
+                for (c, out) in frame.iter_mut().enumerate() {
                     // Two slightly different inputs give the voice width.
                     let x = if c == 0 { osc } else { osc * 0.98 };
                     let v3 = x - v.ic2[c];
@@ -398,7 +398,7 @@ impl Synth {
                     let v2 = v.ic2[c] + a2 * v.ic1[c] + a3 * v3;
                     v.ic1[c] = 2.0 * v1 - v.ic1[c];
                     v.ic2[c] = 2.0 * v2 - v.ic2[c];
-                    frame[c] += v2 * amp;
+                    *out += v2 * amp;
                 }
             }
         }
