@@ -1,0 +1,373 @@
+//! What the window and a hardware controller both change: the mixer, the
+//! instrument knobs and the selection. Either side calls these methods; each
+//! stores the new value for the other side to show and sends the matching
+//! command to the audio thread.
+
+use std::sync::atomic::{AtomicI32, AtomicU32, AtomicU64, AtomicU8, AtomicUsize, Ordering};
+use std::sync::{Arc, Mutex};
+
+use crate::clip::{Sound, Track, SCENES, TRACKS};
+use crate::engine::{Command, Monitor, Quantize};
+use crate::sound::{self, PARAMS};
+
+/// Where a fader sits for 0 dB: positions run -inf..+6 dB, 66 dB over the
+/// travel.
+pub const UNITY: f32 = 60.0 / 66.0;
+
+/// A fader position (0..1) as a gain: 0 is silence, 1 is +6 dB.
+pub fn fader_gain(position: f32) -> f32 {
+    if position <= 0.001 {
+        0.0
+    } else {
+        10f32.powf((6.0 - (1.0 - position) * 66.0) / 20.0)
+    }
+}
+
+/// A fader position as the strip shows it.
+pub fn fader_text(position: f32) -> String {
+    if position <= 0.001 {
+        "-inf".into()
+    } else {
+        format!("{:.1}", 6.0 - (1.0 - position) * 66.0)
+    }
+}
+
+/// A pan knob (0..1) as text: C, 25L, 50R.
+pub fn pan_text(pan: f32) -> String {
+    let p = ((pan - 0.5) * 100.0).round() as i32;
+    match p {
+        0 => "C".into(),
+        p if p < 0 => format!("{}L", -p),
+        p => format!("{p}R"),
+    }
+}
+
+/// What doesn't change while the studio runs: each track's look and sound.
+#[derive(Clone, Debug)]
+pub struct TrackInfo {
+    pub name: String,
+    pub color: u32,
+    pub sound: Sound,
+}
+
+impl TrackInfo {
+    pub fn drums(&self) -> bool {
+        matches!(self.sound, Sound::Drums(_))
+    }
+}
+
+/// Which of the track's controls a mixer value is.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Mix {
+    Volume,
+    Pan,
+    SendA,
+    SendB,
+}
+
+impl Mix {
+    pub const ALL: [Mix; 4] = [Mix::Volume, Mix::Pan, Mix::SendA, Mix::SendB];
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Mix::Volume => "Volume",
+            Mix::Pan => "Pan",
+            Mix::SendA => "Send A",
+            Mix::SendB => "Send B",
+        }
+    }
+}
+
+fn load(a: &AtomicU32) -> f32 {
+    f32::from_bits(a.load(Ordering::Relaxed))
+}
+
+fn store(a: &AtomicU32, v: f32) {
+    a.store(v.to_bits(), Ordering::Relaxed);
+}
+
+fn floats<const N: usize>(v: f32) -> [AtomicU32; N] {
+    std::array::from_fn(|_| AtomicU32::new(v.to_bits()))
+}
+
+pub struct Controls {
+    commands: Mutex<rtrb::Producer<Command>>,
+    pub monitor: Arc<Monitor>,
+    pub tracks: Vec<TrackInfo>,
+    /// Which slots hold a clip, scene-major.
+    clips: [bool; TRACKS * SCENES],
+    mix: [[AtomicU32; 4]; TRACKS],
+    main: AtomicU32,
+    params: [[AtomicU32; PARAMS]; TRACKS],
+    selected_track: AtomicUsize,
+    selected_scene: AtomicI32,
+    quantize: AtomicU8,
+    /// Goes up on every change, so a screen can tell when to redraw.
+    version: AtomicU64,
+}
+
+impl Controls {
+    pub fn new(
+        set: &[Track],
+        colors: &[u32],
+        commands: rtrb::Producer<Command>,
+        monitor: Arc<Monitor>,
+    ) -> Controls {
+        let tracks: Vec<TrackInfo> = set
+            .iter()
+            .enumerate()
+            .map(|(i, t)| TrackInfo {
+                name: t.name.clone(),
+                color: colors.get(i).copied().unwrap_or(0xb69cff),
+                sound: t.sound,
+            })
+            .collect();
+        let params = std::array::from_fn(|t| {
+            let defaults = set
+                .get(t)
+                .map_or([0.5; PARAMS], |tr| sound::default_params(tr.sound));
+            std::array::from_fn(|i| AtomicU32::new(defaults[i].to_bits()))
+        });
+        let mut clips = [false; TRACKS * SCENES];
+        for (t, track) in set.iter().enumerate().take(TRACKS) {
+            for (s, slot) in track.slots.iter().enumerate().take(SCENES) {
+                clips[s * TRACKS + t] = slot.is_some();
+            }
+        }
+        Controls {
+            commands: Mutex::new(commands),
+            monitor,
+            tracks,
+            clips,
+            mix: std::array::from_fn(|_| {
+                let [v, p, a, b]: [AtomicU32; 4] = floats(0.0);
+                store(&v, UNITY);
+                store(&p, 0.5);
+                [v, p, a, b]
+            }),
+            main: AtomicU32::new(UNITY.to_bits()),
+            params,
+            selected_track: AtomicUsize::new(0),
+            selected_scene: AtomicI32::new(-1),
+            quantize: AtomicU8::new(0),
+            version: AtomicU64::new(1),
+        }
+    }
+
+    fn send(&self, cmd: Command) {
+        let pushed = self.commands.lock().map(|mut q| q.push(cmd).is_ok());
+        if !matches!(pushed, Ok(true)) {
+            eprintln!("command queue full");
+        }
+    }
+
+    fn bump(&self) {
+        self.version.fetch_add(1, Ordering::Relaxed);
+    }
+
+    pub fn version(&self) -> u64 {
+        self.version.load(Ordering::Relaxed)
+    }
+
+    pub fn has_clip(&self, track: usize, scene: usize) -> bool {
+        track < TRACKS && scene < SCENES && self.clips[scene * TRACKS + track]
+    }
+
+    // ------------------------------------------------------- launching
+
+    pub fn launch(&self, track: usize, scene: usize) {
+        self.select(track, Some(scene));
+        self.send(Command::Launch { track, scene });
+    }
+
+    pub fn launch_scene(&self, scene: usize) {
+        self.send(Command::Scene(scene));
+    }
+
+    pub fn stop(&self, track: usize) {
+        self.send(Command::Stop(track));
+    }
+
+    pub fn stop_all(&self) {
+        self.send(Command::StopAll);
+    }
+
+    pub fn set_playing(&self, on: bool) {
+        self.send(Command::Play(on));
+    }
+
+    pub fn toggle_play(&self) {
+        self.set_playing(!self.monitor.playing());
+    }
+
+    pub fn tempo_step(&self, delta: f64) {
+        let bpm = ((self.monitor.tempo() + delta) * 10.0).round() / 10.0;
+        self.send(Command::Tempo(bpm.clamp(40.0, 250.0)));
+    }
+
+    pub fn quantize(&self) -> Quantize {
+        match self.quantize.load(Ordering::Relaxed) {
+            1 => Quantize::Beat,
+            2 => Quantize::Off,
+            _ => Quantize::Bar,
+        }
+    }
+
+    pub fn next_quantize(&self) -> Quantize {
+        let q = self.quantize().next();
+        self.quantize.store(
+            match q {
+                Quantize::Bar => 0,
+                Quantize::Beat => 1,
+                Quantize::Off => 2,
+            },
+            Ordering::Relaxed,
+        );
+        self.send(Command::Quantize(q));
+        self.bump();
+        q
+    }
+
+    /// Plays `pitch` on `track`'s instrument now; velocity 0 ends it.
+    pub fn note(&self, track: usize, pitch: u8, velocity: f32) {
+        if track < self.tracks.len() {
+            self.send(Command::Note {
+                track,
+                pitch,
+                velocity,
+            });
+        }
+    }
+
+    // ------------------------------------------------------- selection
+
+    pub fn selected_track(&self) -> usize {
+        self.selected_track.load(Ordering::Relaxed)
+    }
+
+    pub fn selected_scene(&self) -> Option<usize> {
+        usize::try_from(self.selected_scene.load(Ordering::Relaxed)).ok()
+    }
+
+    pub fn select(&self, track: usize, scene: Option<usize>) {
+        if track < self.tracks.len() {
+            self.selected_track.store(track, Ordering::Relaxed);
+        }
+        self.selected_scene.store(
+            scene.map_or(-1, |s| s.min(SCENES - 1) as i32),
+            Ordering::Relaxed,
+        );
+        self.bump();
+    }
+
+    pub fn select_track(&self, track: usize) {
+        self.select(track, self.selected_scene());
+    }
+
+    // ----------------------------------------------------------- mixer
+
+    pub fn mix(&self, track: usize, which: Mix) -> f32 {
+        self.mix
+            .get(track)
+            .map_or(0.0, |m| load(&m[which as usize]))
+    }
+
+    pub fn set_mix(&self, track: usize, which: Mix, value: f32) {
+        let Some(m) = self.mix.get(track) else { return };
+        let v = value.clamp(0.0, 1.0);
+        store(&m[which as usize], v);
+        match which {
+            Mix::Volume => self.send(Command::Volume {
+                track,
+                gain: fader_gain(v),
+            }),
+            Mix::Pan => self.send(Command::Pan { track, pan: v }),
+            // Returns come later: the sends are kept and shown.
+            Mix::SendA | Mix::SendB => {}
+        }
+        self.bump();
+    }
+
+    pub fn main_volume(&self) -> f32 {
+        load(&self.main)
+    }
+
+    pub fn set_main_volume(&self, value: f32) {
+        let v = value.clamp(0.0, 1.0);
+        store(&self.main, v);
+        self.send(Command::MainVolume(fader_gain(v)));
+        self.bump();
+    }
+
+    // ----------------------------------------------------- instruments
+
+    pub fn param(&self, track: usize, index: usize) -> f32 {
+        self.params
+            .get(track)
+            .and_then(|p| p.get(index))
+            .map_or(0.0, load)
+    }
+
+    pub fn set_param(&self, track: usize, index: usize, value: f32) {
+        let Some(a) = self.params.get(track).and_then(|p| p.get(index)) else {
+            return;
+        };
+        let v = value.clamp(0.0, 1.0);
+        store(a, v);
+        self.send(Command::Param {
+            track,
+            index,
+            value: v,
+        });
+        self.bump();
+    }
+
+    /// Knob `index` of `track` as text.
+    pub fn param_text(&self, track: usize, index: usize) -> String {
+        let drums = self.tracks.get(track).is_some_and(|t| t.drums());
+        sound::param_text(drums, index, self.param(track, index))
+    }
+
+    pub fn param_name(&self, track: usize, index: usize) -> &'static str {
+        let drums = self.tracks.get(track).is_some_and(|t| t.drums());
+        sound::params(drums)[index.min(PARAMS - 1)]
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn faders_and_text() {
+        assert_eq!(fader_gain(0.0), 0.0);
+        assert!((fader_gain(UNITY) - 1.0).abs() < 1e-5);
+        assert_eq!(fader_text(UNITY), "0.0");
+        assert_eq!(pan_text(0.5), "C");
+        assert_eq!(pan_text(0.25), "25L");
+        assert_eq!(pan_text(1.0), "50R");
+    }
+
+    #[test]
+    fn changes_reach_the_audio_thread() {
+        let set = crate::clip::demo_set();
+        let (tx, mut rx) = rtrb::RingBuffer::new(16);
+        let monitor = crate::engine::Studio::new(&set, 48_000.0, 120.0).1.monitor;
+        let c = Controls::new(&set, &[0; 4], tx, monitor);
+        let v0 = c.version();
+        c.set_mix(1, Mix::Pan, 0.2);
+        c.set_param(0, 1, 0.3);
+        assert!(c.version() > v0);
+        assert!(matches!(rx.pop(), Ok(Command::Pan { track: 1, .. })));
+        assert!(matches!(
+            rx.pop(),
+            Ok(Command::Param {
+                track: 0,
+                index: 1,
+                ..
+            })
+        ));
+        assert_eq!(c.param_name(0, 1), "Length");
+        assert!(c.has_clip(0, 0));
+    }
+}

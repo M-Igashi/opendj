@@ -112,6 +112,23 @@ pub enum Command {
     },
     /// The main fader, as a linear gain.
     MainVolume(f32),
+    /// A track's pan knob, 0 (left) to 1 (right).
+    Pan {
+        track: usize,
+        pan: f32,
+    },
+    /// An instrument knob, 0..1 (see `sound::params`).
+    Param {
+        track: usize,
+        index: usize,
+        value: f32,
+    },
+    /// A note played live on a track's instrument; velocity 0 ends it.
+    Note {
+        track: usize,
+        pitch: u8,
+        velocity: f32,
+    },
     /// A recompiled set, after an edit (clip editing comes in step 3).
     #[allow(dead_code)]
     Program(Box<Program>),
@@ -294,6 +311,8 @@ struct Column {
     held_len: usize,
     instrument: Instrument,
     gain: f32,
+    /// Left and right gains from the pan knob.
+    pan: [f32; 2],
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -364,6 +383,7 @@ impl Engine {
                 held: [Held { pitch: 0, off: 0.0 }; MAX_HELD],
                 held_len: 0,
                 gain: 1.0,
+                pan: [1.0, 1.0],
                 instrument: match t.sound {
                     Sound::Drums(kit) => Instrument::Drums(Box::new(Drums::new(kit, rate, 0.45))),
                     Sound::Bass => Instrument::Synth(Box::new(Synth::new(sound::BASS, rate))),
@@ -462,6 +482,36 @@ impl Engine {
             }
             Command::MainVolume(gain) => {
                 self.main_gain = gain.max(0.0);
+                None
+            }
+            Command::Pan { track, pan } => {
+                if let Some(c) = self.columns.get_mut(track) {
+                    c.pan = pan_gains(pan);
+                }
+                None
+            }
+            Command::Param {
+                track,
+                index,
+                value,
+            } => {
+                if let Some(c) = self.columns.get_mut(track) {
+                    c.instrument.set_param(index, value);
+                }
+                None
+            }
+            Command::Note {
+                track,
+                pitch,
+                velocity,
+            } => {
+                if let Some(c) = self.columns.get_mut(track) {
+                    if velocity > 0.0 {
+                        c.instrument.note_on(pitch, velocity.min(1.0));
+                    } else {
+                        c.instrument.note_off(pitch);
+                    }
+                }
                 None
             }
             Command::Quantize(q) => {
@@ -583,9 +633,10 @@ impl Engine {
                 self.columns[t].instrument.render(&mut scratch[done..]);
             }
             let gain = self.columns[t].gain;
+            let [pl, pr] = self.columns[t].pan;
             let mut peak = 0.0f32;
             for (o, s) in out.iter_mut().zip(scratch.iter()) {
-                let (l, r) = (s[0] * gain, s[1] * gain);
+                let (l, r) = (s[0] * gain * pl, s[1] * gain * pr);
                 peak = peak.max(l.abs()).max(r.abs());
                 o[0] += l;
                 o[1] += r;
@@ -757,6 +808,14 @@ fn order(kind: Kind) -> u8 {
 }
 
 #[inline]
+/// Left and right gains for a pan knob at `pan` (0..1): equal power, and
+/// unity in both channels at the centre.
+fn pan_gains(pan: f32) -> [f32; 2] {
+    let angle = pan.clamp(0.0, 1.0) * std::f32::consts::FRAC_PI_2;
+    let root2 = std::f32::consts::SQRT_2;
+    [angle.cos() * root2, angle.sin() * root2]
+}
+
 fn soft_clip(x: f32) -> f32 {
     if x.abs() < 0.8 {
         x

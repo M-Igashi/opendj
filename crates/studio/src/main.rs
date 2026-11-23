@@ -13,20 +13,23 @@
 mod audio;
 mod check;
 mod clip;
+mod control;
 mod engine;
 mod link;
+mod push;
 mod sound;
 
-use std::cell::{Cell, RefCell};
+use std::cell::RefCell;
 use std::rc::Rc;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use cpal::traits::DeviceTrait;
 use slint::{Color, ComponentHandle, Model, ModelRc, SharedString, VecModel};
 
 use clip::{SCENES, TRACKS};
-use engine::{Command, Quantize, Studio};
+use control::{Controls, Mix};
+use engine::{Quantize, Studio};
 
 slint::include_modules!();
 
@@ -46,16 +49,6 @@ fn device_name(sound: clip::Sound) -> String {
         clip::Sound::Bass => "Bass Synth".into(),
         clip::Sound::Pad => "Pad Synth".into(),
         clip::Sound::Lead => "Lead Synth".into(),
-    }
-}
-
-/// A fader position (0..1) as a gain: 0 is silence, 1 is +6 dB and 0 dB
-/// sits at 60/66, so each step of the fader is the same number of dB.
-fn fader_gain(position: f32) -> f32 {
-    if position <= 0.001 {
-        0.0
-    } else {
-        10f32.powf((6.0 - (1.0 - position) * 66.0) / 20.0)
     }
 }
 
@@ -79,8 +72,14 @@ fn main() {
             std::process::exit(check::render(path));
         }
         Some("--link-check") => std::process::exit(check::link()),
+        Some("--push-preview") => {
+            let path = args.get(1).map(String::as_str).unwrap_or("push.png");
+            std::process::exit(check::push_preview(path));
+        }
         Some(other) => {
-            eprintln!("unknown option {other}; use --check, --render <file.wav> or --link-check");
+            eprintln!(
+                "unknown option {other}; use --check, --render <file.wav>, --link-check or --push-preview <file.png>"
+            );
             std::process::exit(2);
         }
         None => {}
@@ -153,18 +152,16 @@ fn ui(
     status: String,
 ) -> Result<(), slint::PlatformError> {
     let window = AppWindow::new()?;
+    let monitor = remote.monitor.clone();
+    let controls = Arc::new(Controls::new(
+        &set,
+        &TRACK_COLORS,
+        remote.commands,
+        monitor.clone(),
+    ));
     let tracks = Rc::new(VecModel::from(
-        set.iter()
-            .enumerate()
-            .map(|(i, t)| TrackData {
-                name: t.name.as_str().into(),
-                color: color(TRACK_COLORS[i]),
-                progress: -1.0,
-                stopping: false,
-                device: device_name(t.sound).into(),
-                drums: matches!(t.sound, clip::Sound::Drums(_)),
-                level: 0.0,
-            })
+        (0..set.len())
+            .map(|i| track_row(&controls, i))
             .collect::<Vec<_>>(),
     ));
     let slots = Rc::new(VecModel::from(
@@ -189,55 +186,41 @@ fn ui(
     window.set_tracks(ModelRc::from(tracks.clone()));
     window.set_slots(ModelRc::from(slots.clone()));
     window.set_scenes(SCENES as i32);
-    window.set_status(status.into());
+    window.set_status(status.clone().into());
     window.set_quantize(Quantize::Bar.label().into());
+    window.set_main_volume(controls.main_volume());
 
-    let monitor = remote.monitor.clone();
-    let commands = Rc::new(RefCell::new(remote.commands));
     let trash = RefCell::new(remote.trash);
-    let send = {
-        let commands = commands.clone();
-        move |cmd: Command| {
-            if commands.borrow_mut().push(cmd).is_err() {
-                eprintln!("command queue full");
-            }
-        }
-    };
-    let send = Rc::new(send);
+    let push_status: push::Status = Arc::new(Mutex::new(String::new()));
+    let push = push::start(controls.clone(), push_status.clone());
 
     {
-        let send = send.clone();
-        window.on_launch_clip(move |t, s| {
-            send(Command::Launch {
-                track: t as usize,
-                scene: s as usize,
-            })
-        });
+        let c = controls.clone();
+        window.on_launch_clip(move |t, s| c.launch(t as usize, s as usize));
     }
     {
-        let send = send.clone();
-        window.on_launch_scene(move |s| send(Command::Scene(s as usize)));
+        let c = controls.clone();
+        window.on_select(move |t, s| c.select(t as usize, usize::try_from(s).ok()));
     }
     {
-        let send = send.clone();
-        window.on_stop_track(move |t| send(Command::Stop(t as usize)));
+        let c = controls.clone();
+        window.on_launch_scene(move |s| c.launch_scene(s as usize));
     }
     {
-        let send = send.clone();
-        window.on_stop_all(move || send(Command::StopAll));
+        let c = controls.clone();
+        window.on_stop_track(move |t| c.stop(t as usize));
     }
     {
-        let send = send.clone();
-        let monitor = monitor.clone();
-        window.on_toggle_play(move || send(Command::Play(!monitor.playing())));
+        let c = controls.clone();
+        window.on_stop_all(move || c.stop_all());
     }
     {
-        let send = send.clone();
-        let monitor = monitor.clone();
-        window.on_tempo_step(move |d| {
-            let bpm = (monitor.tempo().round() + d as f64).clamp(40.0, 250.0);
-            send(Command::Tempo(bpm));
-        });
+        let c = controls.clone();
+        window.on_toggle_play(move || c.toggle_play());
+    }
+    {
+        let c = controls.clone();
+        window.on_tempo_step(move |d| c.tempo_step(d as f64));
     }
     {
         let link = link.clone();
@@ -248,35 +231,35 @@ fn ui(
         });
     }
     {
-        let send = send.clone();
-        window.on_volume(move |t, v| {
-            send(Command::Volume {
-                track: t as usize,
-                gain: fader_gain(v),
-            })
+        let c = controls.clone();
+        window.on_next_quantize(move || {
+            c.next_quantize();
         });
     }
     {
-        let send = send.clone();
-        window.on_main_volume(move |v| send(Command::MainVolume(fader_gain(v))));
-    }
-    let quantize = Rc::new(Cell::new(Quantize::Bar));
-    {
-        let send = send.clone();
-        let quantize = quantize.clone();
-        let w = window.as_weak();
-        window.on_next_quantize(move || {
-            let q = quantize.get().next();
-            quantize.set(q);
-            send(Command::Quantize(q));
-            if let Some(w) = w.upgrade() {
-                w.set_quantize(q.label().into());
+        let c = controls.clone();
+        window.on_mix(move |t, which, v| {
+            if let Some(&m) = Mix::ALL.get(which as usize) {
+                c.set_mix(t as usize, m, v);
             }
         });
+    }
+    {
+        let c = controls.clone();
+        window.on_main_volume_changed(move |v| c.set_main_volume(v));
+    }
+    {
+        let c = controls.clone();
+        window.on_param(move |t, i, v| c.set_param(t as usize, i as usize, v));
+    }
+    {
+        let c = controls.clone();
+        window.on_play_note(move |t, p, v| c.note(t as usize, p.clamp(0, 127) as u8, v));
     }
 
     let timer = slint::Timer::default();
     let w = window.as_weak();
+    let mut seen = 0u64;
     timer.start(
         slint::TimerMode::Repeated,
         Duration::from_millis(33),
@@ -301,12 +284,33 @@ fn ui(
                     }
                 }
             }
-            for t in 0..TRACKS {
+            // Mixer, knobs and selection: from either the window or Push.
+            let version = controls.version();
+            let changed = version != seen;
+            seen = version;
+            if changed {
+                w.set_selected_track(controls.selected_track() as i32);
+                w.set_selected_scene(controls.selected_scene().map_or(-1, |s| s as i32));
+                w.set_main_volume(controls.main_volume());
+                w.set_quantize(controls.quantize().label().into());
+            }
+            for t in 0..tracks.row_count() {
                 if let Some(mut row) = tracks.row_data(t) {
                     let progress = monitor.progress(t);
                     let stopping = monitor.stopping(t);
                     let level = meter(row.level, monitor.take_peak(t));
-                    if (row.progress - progress).abs() > 0.002
+                    if changed {
+                        let fresh = track_row(&controls, t);
+                        row.volume = fresh.volume;
+                        row.pan = fresh.pan;
+                        row.pan_text = fresh.pan_text;
+                        row.send_a = fresh.send_a;
+                        row.send_b = fresh.send_b;
+                        row.volume_text = fresh.volume_text;
+                        row.params = fresh.params;
+                    }
+                    if changed
+                        || (row.progress - progress).abs() > 0.002
                         || row.stopping != stopping
                         || (row.level - level).abs() > 0.005
                     {
@@ -328,10 +332,51 @@ fn ui(
             w.set_link(link.is_enabled());
             w.set_peers(link.num_peers() as i32);
             w.set_load(format!("{:.0}%", monitor.load() * 100.0).into());
+            let push = push_status.lock().map(|s| s.clone()).unwrap_or_default();
+            let line = if push.is_empty() {
+                status.clone()
+            } else {
+                format!("{status} · {push}")
+            };
+            if w.get_status().as_str() != line {
+                w.set_status(line.into());
+            }
         },
     );
 
     let result = window.run();
+    // Push back to Live before the sound stops.
+    drop(push);
     drop(output);
     result
+}
+
+/// A track's row for the window, from the shared controls.
+fn track_row(c: &Controls, t: usize) -> TrackData {
+    let info = &c.tracks[t];
+    let params: Vec<ParamData> = (0..sound::PARAMS)
+        .map(|i| ParamData {
+            name: c.param_name(t, i).into(),
+            value: c.param(t, i),
+            text: c.param_text(t, i).into(),
+        })
+        .collect();
+    let volume = c.mix(t, Mix::Volume);
+    let pan = c.mix(t, Mix::Pan);
+    TrackData {
+        name: info.name.as_str().into(),
+        color: color(info.color),
+        progress: c.monitor.progress(t),
+        stopping: c.monitor.stopping(t),
+        device: device_name(info.sound).into(),
+        drums: info.drums(),
+        level: 0.0,
+        volume,
+        volume_text: control::fader_text(volume).into(),
+        pan,
+        pan_text: control::pan_text(pan).into(),
+        send_a: c.mix(t, Mix::SendA),
+        send_b: c.mix(t, Mix::SendB),
+        params: ModelRc::new(VecModel::from(params)),
+    }
 }

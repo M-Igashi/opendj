@@ -35,6 +35,12 @@ export struct SlotData {
     beats: float,
 }
 
+export struct ParamData {
+    name: string,
+    value: float,
+    text: string,
+}
+
 export struct TrackData {
     name: string,
     color: color,
@@ -47,6 +53,15 @@ export struct TrackData {
     drums: bool,
     // Meter, 0..1 on a dB scale.
     level: float,
+    // Fader position 0..1 (0 dB at 60/66) and as text.
+    volume: float,
+    volume-text: string,
+    pan: float,
+    pan-text: string,
+    send-a: float,
+    send-b: float,
+    // The instrument's knobs.
+    params: [ParamData],
 }
 
 struct BrowserItem {
@@ -110,17 +125,23 @@ component Readout inherits Rectangle {
 }
 
 // A rotary knob: drag up and down. The arc runs from 7 to 5 o'clock.
+// Its value comes from the model; a `free` knob (not connected yet) keeps
+// its own.
 component Knob inherits Rectangle {
     in property <string> label;
     in property <string> display;
-    in-out property <float> value: 0.5;
+    in property <float> value: 0.5;
+    in property <bool> free;
     in property <bool> bipolar;
     in property <length> size: 30px;
     in property <color> tint: Theme.accent;
     callback changed(float);
+    property <float> local;
+    property <float> shown: free ? local : value;
     property <float> start-value;
     property <angle> a0: 135deg;
-    property <angle> a1: 135deg + 270deg * value;
+    property <angle> a1: 135deg + 270deg * shown;
+    init => { local = value; }
     property <angle> centre: 270deg;
     width: max(size, 48px);
     height: (label != "" ? 14px : 0px) + size + (display != "" ? 14px : 0px);
@@ -176,6 +197,10 @@ component Knob inherits Rectangle {
         commands: "M " + (18 + 5 * cos(a1)) + " " + (18 + 5 * sin(a1))
             + " L " + (18 + 11 * cos(a1)) + " " + (18 + 11 * sin(a1));
     }
+    function set(v: float) {
+        local = max(0, min(1, v));
+        changed(local);
+    }
     if display != "": Text {
         y: parent.height - 14px;
         height: 14px;
@@ -189,25 +214,33 @@ component Knob inherits Rectangle {
         mouse-cursor: ns-resize;
         pointer-event(e) => {
             if e.kind == PointerEventKind.down {
-                root.start-value = root.value;
+                root.start-value = root.shown;
             }
         }
         moved => {
-            root.value = max(0, min(1, root.start-value + (self.pressed-y - self.mouse-y) / 160px));
-            root.changed(root.value);
+            root.set(root.start-value + (self.pressed-y - self.mouse-y) / 160px);
         }
         double-clicked => {
-            root.value = root.bipolar ? 0.5 : root.value;
-            root.changed(root.value);
+            if root.bipolar {
+                root.set(0.5);
+            }
         }
     }
 }
 
 // A vertical fader. 0..1 maps to -inf..+6 dB; 0 dB sits at 60/66.
 component Fader inherits Rectangle {
-    in-out property <float> value: 60 / 66;
+    in property <float> value: 60 / 66;
+    in property <bool> free;
     callback changed(float);
+    property <float> local;
+    property <float> shown: free ? local : value;
     property <float> start-value;
+    init => { local = value; }
+    function set(v: float) {
+        local = max(0, min(1, v));
+        changed(local);
+    }
     property <length> thumb: 12px;
     width: 18px;
     Rectangle {
@@ -225,7 +258,7 @@ component Fader inherits Rectangle {
         background: Theme.faint;
     }
     Rectangle {
-        y: (1 - value) * (parent.height - thumb);
+        y: (1 - shown) * (parent.height - thumb);
         height: thumb;
         border-radius: 2px;
         background: ta.pressed ? Theme.text : #c9cacd;
@@ -235,16 +268,14 @@ component Fader inherits Rectangle {
         mouse-cursor: ns-resize;
         pointer-event(e) => {
             if e.kind == PointerEventKind.down {
-                root.start-value = root.value;
+                root.start-value = root.shown;
             }
         }
         moved => {
-            root.value = max(0, min(1, root.start-value + (self.pressed-y - self.mouse-y) / (root.height - root.thumb)));
-            root.changed(root.value);
+            root.set(root.start-value + (self.pressed-y - self.mouse-y) / (root.height - root.thumb));
         }
         double-clicked => {
-            root.value = 60 / 66;
-            root.changed(root.value);
+            root.set(60 / 66);
         }
     }
 }
@@ -283,14 +314,24 @@ component SmallButton inherits Rectangle {
 }
 
 // A mixer strip: sends, pan, fader with meter, activator, solo and arm.
+// Values come from the model; `free` strips (returns, not connected yet)
+// keep their own.
 component Strip inherits Rectangle {
     in property <color> tint;
     in property <string> number;
     in property <float> level;
     in property <bool> sends: true;
     in property <bool> arm: true;
-    callback volume(float);
-    property <float> fader: 60 / 66;
+    in property <bool> free;
+    in property <float> volume: 60 / 66;
+    in property <float> pan: 0.5;
+    in property <string> pan-text: "C";
+    in property <float> send-a;
+    in property <float> send-b;
+    // Which control (0 volume, 1 pan, 2 send A, 3 send B) and its value.
+    callback changed(int, float);
+    property <float> fader: free ? local-volume : volume;
+    property <float> local-volume: 60 / 66;
     property <bool> active: true;
     property <bool> solo;
     property <bool> armed;
@@ -302,12 +343,32 @@ component Strip inherits Rectangle {
             alignment: center;
             spacing: -14px;
             height: 44px;
-            if sends: Knob { label: "A"; size: 24px; tint: Theme.return-a; value: 0; }
-            if sends: Knob { label: "B"; size: 24px; tint: Theme.return-b; value: 0; }
+            if sends: Knob {
+                label: "A";
+                size: 24px;
+                tint: Theme.return-a;
+                value: root.send-a;
+                changed(v) => { root.changed(2, v); }
+            }
+            if sends: Knob {
+                label: "B";
+                size: 24px;
+                tint: Theme.return-b;
+                value: root.send-b;
+                changed(v) => { root.changed(3, v); }
+            }
         }
         HorizontalLayout {
             alignment: center;
-            Knob { size: 24px; bipolar: true; value: 0.5; display: "C"; label: "Pan"; }
+            Knob {
+                size: 24px;
+                bipolar: true;
+                free: root.free;
+                value: root.pan;
+                display: root.free ? "" : root.pan-text;
+                label: "Pan";
+                changed(v) => { root.changed(1, v); }
+            }
         }
         HorizontalLayout {
             alignment: center;
@@ -322,8 +383,12 @@ component Strip inherits Rectangle {
                 vertical-alignment: top;
             }
             Fader {
-                value <=> root.fader;
-                changed(v) => { root.volume(v); }
+                value: root.fader;
+                free: root.free;
+                changed(v) => {
+                    root.local-volume = v;
+                    root.changed(0, v);
+                }
             }
             Meter { level: root.level; }
             Meter { level: root.level; }
@@ -798,13 +863,43 @@ component ClipPanel inherits Rectangle {
     }
 }
 
-component Pad inherits Rectangle {
-    in property <string> label;
+// An instrument's eight knobs in two rows, as Push's encoders turn them.
+component ParamKnobs inherits VerticalLayout {
+    in property <[ParamData]> params;
     in property <color> tint;
+    callback changed(int, float);
+    spacing: 8px;
+    alignment: center;
+    for row in 2: HorizontalLayout {
+        spacing: 4px;
+        for col in 4: Knob {
+            label: params[row * 4 + col].name;
+            display: params[row * 4 + col].text;
+            value: params[row * 4 + col].value;
+            tint: root.tint;
+            width: 62px;
+            changed(v) => { root.changed(row * 4 + col, v); }
+        }
+    }
+}
+
+component DrumPad inherits Rectangle {
+    in property <string> label;
+    in property <int> pitch;
+    in property <color> tint;
+    callback note(int, float);
     border-radius: 2px;
     background: ta.pressed ? tint : tint.with-alpha(ta.has-hover ? 0.32 : 0.2);
     Text { text: label; color: Theme.text; font-size: 10px; }
-    ta := TouchArea { }
+    ta := TouchArea {
+        pointer-event(e) => {
+            if e.button == PointerEventButton.left && e.kind == PointerEventKind.down {
+                root.note(root.pitch, 0.9);
+            } else if e.button == PointerEventButton.left && e.kind == PointerEventKind.up {
+                root.note(root.pitch, 0);
+            }
+        }
+    }
 }
 
 export component AppWindow inherits Window {
@@ -830,8 +925,10 @@ export component AppWindow inherits Window {
     in property <string> status;
     in property <bool> blink;
     in property <float> main-level;
-    in-out property <int> selected-track: 0;
-    in-out property <int> selected-scene: -1;
+    // Set from the shared controls: the window and Push both select.
+    in property <int> selected-track: 0;
+    in property <int> selected-scene: -1;
+    in property <float> main-volume: 60 / 66;
 
     callback launch-clip(int, int);   // track, scene
     callback launch-scene(int);
@@ -841,9 +938,14 @@ export component AppWindow inherits Window {
     callback tempo-step(float);
     callback toggle-link();
     callback next-quantize();
-    // Fader positions, 0..1.
-    callback volume(int, float);
-    callback main-volume(float);
+    callback select(int, int);         // track, scene (-1 for none)
+    // Track, control (0 volume, 1 pan, 2 send A, 3 send B), value 0..1.
+    callback mix(int, int, float);
+    callback main-volume-changed(float);
+    // Track, instrument knob, value 0..1.
+    callback param(int, int, float);
+    // Track, pitch, velocity (0 ends the note).
+    callback play-note(int, int, float);
 
     property <TrackData> track: tracks[selected-track];
     property <bool> has-clip: selected-scene >= 0
@@ -951,7 +1053,7 @@ export component AppWindow inherits Window {
                                 }
                                 Text { text: "MIDI"; color: #10111299; font-size: 9px; font-weight: 700; vertical-alignment: center; }
                             }
-                            TouchArea { clicked => { selected-track = i; } }
+                            TouchArea { clicked => { root.select(i, selected-scene); } }
                         }
                         // Clip slots.
                         for s in scenes: ClipSlot {
@@ -961,11 +1063,7 @@ export component AppWindow inherits Window {
                             blink: root.blink;
                             progress: t.progress;
                             selected: i == selected-track && s == selected-scene;
-                            launch => {
-                                selected-track = i;
-                                selected-scene = s;
-                                root.launch-clip(i, s);
-                            }
+                            launch => { root.launch-clip(i, s); }
                         }
                         // Stop button.
                         Rectangle {
@@ -993,7 +1091,12 @@ export component AppWindow inherits Window {
                             tint: t.color;
                             number: i + 1;
                             level: t.level;
-                            volume(v) => { root.volume(i, v); }
+                            volume: t.volume;
+                            pan: t.pan;
+                            pan-text: t.pan-text;
+                            send-a: t.send-a;
+                            send-b: t.send-b;
+                            changed(which, v) => { root.mix(i, which, v); }
                         }
                         Rectangle {
                             y: session.mixer-y;
@@ -1058,6 +1161,7 @@ export component AppWindow inherits Window {
                             number: r.letter;
                             sends: false;
                             arm: false;
+                            free: true;
                             level: 0;
                         }
                         Rectangle { y: session.mixer-y; height: 1px; background: r.color; }
@@ -1124,7 +1228,12 @@ export component AppWindow inherits Window {
                             sends: false;
                             arm: false;
                             level: root.main-level;
-                            volume(v) => { root.main-volume(v); }
+                            volume: root.main-volume;
+                            changed(which, v) => {
+                                if which == 0 {
+                                    root.main-volume-changed(v);
+                                }
+                            }
                         }
                         Rectangle { y: session.mixer-y; height: 1px; background: Theme.select; }
                     }
@@ -1149,72 +1258,55 @@ export component AppWindow inherits Window {
                             data: root.has-clip ? slots[selected-scene * tracks.length + selected-track] : { name: "", beats: 0 };
                         }
                         if track.drums: Device {
-                            width: 380px;
+                            width: 480px;
                             title: track.device;
                             tint: track.color;
                             selected: true;
                             HorizontalLayout {
                                 padding: 8px;
                                 spacing: 10px;
+                                // Laid out as Push plays them in Note mode.
                                 GridLayout {
                                     spacing: 3px;
-                                    width: 200px;
+                                    width: 190px;
                                     Row {
-                                        Pad { label: "Ride"; tint: track.color; }
-                                        Pad { label: "Crash"; tint: track.color; }
-                                        Pad { label: "Cowbell"; tint: track.color; }
-                                        Pad { label: "Clap"; tint: track.color; }
+                                        DrumPad { label: "Ride"; pitch: 51; tint: track.color; note(p, v) => { root.play-note(selected-track, p, v); } }
+                                        Rectangle { }
+                                        Rectangle { }
+                                        Rectangle { }
                                     }
                                     Row {
-                                        Pad { label: "Rim"; tint: track.color; }
-                                        Pad { label: "Open hat"; tint: track.color; }
-                                        Pad { label: "Tom"; tint: track.color; }
-                                        Pad { label: "Perc"; tint: track.color; }
+                                        DrumPad { label: "Clap"; pitch: 39; tint: track.color; note(p, v) => { root.play-note(selected-track, p, v); } }
+                                        DrumPad { label: "Rim"; pitch: 37; tint: track.color; note(p, v) => { root.play-note(selected-track, p, v); } }
+                                        DrumPad { label: "Cowbell"; pitch: 56; tint: track.color; note(p, v) => { root.play-note(selected-track, p, v); } }
+                                        DrumPad { label: "Crash"; pitch: 49; tint: track.color; note(p, v) => { root.play-note(selected-track, p, v); } }
                                     }
                                     Row {
-                                        Pad { label: "Kick"; tint: track.color; }
-                                        Pad { label: "Snare"; tint: track.color; }
-                                        Pad { label: "Closed hat"; tint: track.color; }
-                                        Pad { label: "Shaker"; tint: track.color; }
+                                        DrumPad { label: "Kick"; pitch: 36; tint: track.color; note(p, v) => { root.play-note(selected-track, p, v); } }
+                                        DrumPad { label: "Snare"; pitch: 38; tint: track.color; note(p, v) => { root.play-note(selected-track, p, v); } }
+                                        DrumPad { label: "Closed hat"; pitch: 42; tint: track.color; note(p, v) => { root.play-note(selected-track, p, v); } }
+                                        DrumPad { label: "Open hat"; pitch: 46; tint: track.color; note(p, v) => { root.play-note(selected-track, p, v); } }
                                     }
                                 }
-                                GridLayout {
-                                    spacing: 4px;
-                                    Row {
-                                        Knob { label: "Tune"; display: "0 st"; bipolar: true; tint: track.color; }
-                                        Knob { label: "Decay"; display: "100%"; value: 0.7; tint: track.color; }
-                                    }
-                                    Row {
-                                        Knob { label: "Drive"; display: "0%"; value: 0; tint: track.color; }
-                                        Knob { label: "Volume"; display: "-7 dB"; value: 0.45; tint: track.color; }
-                                    }
+                                ParamKnobs {
+                                    params: track.params;
+                                    tint: track.color;
+                                    changed(i, v) => { root.param(selected-track, i, v); }
                                 }
                             }
                         }
                         if !track.drums: Device {
-                            width: 420px;
+                            width: 300px;
                             title: track.device;
                             tint: track.color;
                             selected: true;
-                            GridLayout {
+                            HorizontalLayout {
                                 padding: 8px;
-                                spacing-horizontal: 4px;
-                                spacing-vertical: 8px;
-                                Row {
-                                    Knob { label: "Detune"; display: "12 ct"; value: 0.3; tint: track.color; }
-                                    Knob { label: "Sub"; display: "40%"; value: 0.4; tint: track.color; }
-                                    Knob { label: "Cutoff"; display: "1.2 kHz"; value: 0.55; tint: track.color; }
-                                    Knob { label: "Reso"; display: "20%"; value: 0.2; tint: track.color; }
-                                    Knob { label: "Env amt"; display: "45%"; value: 0.45; tint: track.color; }
-                                    Knob { label: "Glide"; display: "0 ms"; value: 0; tint: track.color; }
-                                }
-                                Row {
-                                    Knob { label: "Attack"; display: "5 ms"; value: 0.1; tint: track.color; }
-                                    Knob { label: "Decay"; display: "300 ms"; value: 0.4; tint: track.color; }
-                                    Knob { label: "Sustain"; display: "70%"; value: 0.7; tint: track.color; }
-                                    Knob { label: "Release"; display: "250 ms"; value: 0.35; tint: track.color; }
-                                    Knob { label: "Voices"; display: "12"; value: 0.75; tint: track.color; }
-                                    Knob { label: "Volume"; display: "0 dB"; value: 0.8; tint: track.color; }
+                                alignment: center;
+                                ParamKnobs {
+                                    params: track.params;
+                                    tint: track.color;
+                                    changed(i, v) => { root.param(selected-track, i, v); }
                                 }
                             }
                         }
@@ -1226,10 +1318,10 @@ export component AppWindow inherits Window {
                                 padding: 8px;
                                 spacing: 2px;
                                 alignment: center;
-                                Knob { label: "Low"; display: "0 dB"; bipolar: true; size: 36px; tint: Theme.effect; }
-                                Knob { label: "Mid"; display: "0 dB"; bipolar: true; size: 36px; tint: Theme.effect; }
-                                Knob { label: "High"; display: "0 dB"; bipolar: true; size: 36px; tint: Theme.effect; }
-                                Knob { label: "Output"; display: "0 dB"; bipolar: true; size: 36px; tint: Theme.effect; }
+                                Knob { free: true; label: "Low"; display: "0 dB"; bipolar: true; size: 36px; tint: Theme.effect; }
+                                Knob { free: true; label: "Mid"; display: "0 dB"; bipolar: true; size: 36px; tint: Theme.effect; }
+                                Knob { free: true; label: "High"; display: "0 dB"; bipolar: true; size: 36px; tint: Theme.effect; }
+                                Knob { free: true; label: "Output"; display: "0 dB"; bipolar: true; size: 36px; tint: Theme.effect; }
                             }
                         }
                         Device {
@@ -1240,9 +1332,9 @@ export component AppWindow inherits Window {
                                 padding: 8px;
                                 spacing: 2px;
                                 alignment: center;
-                                Knob { label: "Time"; display: "1/8"; value: 0.4; size: 36px; tint: Theme.effect; }
-                                Knob { label: "Feedback"; display: "35%"; value: 0.35; size: 36px; tint: Theme.effect; }
-                                Knob { label: "Dry/Wet"; display: "20%"; value: 0.2; size: 36px; tint: Theme.effect; }
+                                Knob { free: true; label: "Time"; display: "1/8"; value: 0.4; size: 36px; tint: Theme.effect; }
+                                Knob { free: true; label: "Feedback"; display: "35%"; value: 0.35; size: 36px; tint: Theme.effect; }
+                                Knob { free: true; label: "Dry/Wet"; display: "20%"; value: 0.2; size: 36px; tint: Theme.effect; }
                             }
                         }
                         Rectangle {
@@ -1278,7 +1370,7 @@ export component AppWindow inherits Window {
                     horizontal-stretch: 1;
                 }
                 Text {
-                    text: tracks.length + " tracks · " + scenes + " scenes · instruments, sends and effects are a preview";
+                    text: tracks.length + " tracks · " + scenes + " scenes · sends, returns and effects are a preview";
                     color: Theme.faint;
                     font-size: 11px;
                     vertical-alignment: center;

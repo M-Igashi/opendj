@@ -24,3 +24,14 @@ openDJ Studio SHALL be able to join an Ableton Link session, take its tempo and 
 #### Scenario: Playing with openDJ
 - **WHEN** openDJ and openDJ Studio are both in a Link session and the studio's clip is launched
 - **THEN** it starts on a bar of the session, in time with openDJ's master deck
+
+### Requirement: Ableton Push 2 control
+openDJ Studio SHALL use an Ableton Push 2 without Ableton Live running: it SHALL switch Push to User mode on its User port, show the Session grid on the pads in each track's colour (queued clips blinking and playing clips pulsing in time with the clock), launch clips and scenes from the pads and scene buttons, stop tracks from the buttons over the screen, select tracks from the buttons under it, turn the selected instrument's knobs or the mixer from the eight encoders, and show the knobs' names and values on Push's screen. When the studio closes it SHALL turn Push's lights off and hand Push back to Live mode.
+
+#### Scenario: Launching from Push
+- **WHEN** Push 2 is plugged in and the top-left pad is pressed
+- **THEN** track 1's clip in scene 1 launches at the next launch point, as if pressed in the window
+
+#### Scenario: Turning a knob on Push
+- **WHEN** the Bass track is selected and the first encoder is turned right
+- **THEN** the bass synth's cutoff rises, and the window and Push's screen show the new value

@@ -39,11 +39,152 @@ impl Instrument {
         }
     }
 
+    /// Sets knob `index` (see [`params`]) to `value`, 0..1.
+    pub fn set_param(&mut self, index: usize, value: f32) {
+        let v = value.clamp(0.0, 1.0);
+        match self {
+            Instrument::Drums(d) => d.set_param(index, v),
+            Instrument::Synth(s) => s.preset.set_param(index, v),
+        }
+    }
+
     /// Adds `out.len()` frames of sound to `out`.
     pub fn render(&mut self, out: &mut [[f32; 2]]) {
         match self {
             Instrument::Drums(d) => d.render(out),
             Instrument::Synth(s) => s.render(out),
+        }
+    }
+}
+
+// --------------------------------------------------------------- knobs
+
+/// Knobs per instrument: one page of Push's eight encoders.
+pub const PARAMS: usize = 8;
+
+pub const DRUM_PARAMS: [&str; PARAMS] = [
+    "Volume", "Length", "Kick", "Snare", "Hats", "Claps", "Perc", "Cymbals",
+];
+
+pub const SYNTH_PARAMS: [&str; PARAMS] = [
+    "Cutoff",
+    "Resonance",
+    "Env amount",
+    "Sub",
+    "Attack",
+    "Decay",
+    "Sustain",
+    "Release",
+];
+
+/// The knob names for an instrument.
+pub fn params(drums: bool) -> &'static [&'static str; PARAMS] {
+    if drums {
+        &DRUM_PARAMS
+    } else {
+        &SYNTH_PARAMS
+    }
+}
+
+/// 0..1 on a log scale between `lo` and `hi`.
+fn log_to(v: f32, lo: f32, hi: f32) -> f32 {
+    lo * (hi / lo).powf(v)
+}
+
+fn log_from(x: f32, lo: f32, hi: f32) -> f32 {
+    ((x.max(lo) / lo).ln() / (hi / lo).ln()).clamp(0.0, 1.0)
+}
+
+const CUTOFF: (f32, f32) = (40.0, 12_000.0);
+const RESONANCE: f32 = 0.95;
+const ENV_AMOUNT: f32 = 8000.0;
+const ATTACK: (f32, f32) = (0.001, 2.0);
+const DECAY: (f32, f32) = (0.01, 4.0);
+
+/// A drum level knob: 0.5 is as the kit was made, 1 is +12 dB.
+fn level(v: f32) -> f32 {
+    (v * 2.0) * (v * 2.0)
+}
+
+fn db(gain: f32) -> String {
+    if gain <= 1e-4 {
+        "-inf dB".into()
+    } else {
+        format!("{:+.1} dB", 20.0 * gain.log10())
+    }
+}
+
+fn seconds(s: f32) -> String {
+    if s < 1.0 {
+        format!("{:.0} ms", s * 1000.0)
+    } else {
+        format!("{s:.2} s")
+    }
+}
+
+/// How knob `index` at `value` reads on screen.
+pub fn param_text(drums: bool, index: usize, value: f32) -> String {
+    let v = value.clamp(0.0, 1.0);
+    let pct = || format!("{:.0}%", v * 100.0);
+    if drums {
+        return match index {
+            1 => pct(),
+            _ => db(level(v)),
+        };
+    }
+    match index {
+        0 => {
+            let hz = log_to(v, CUTOFF.0, CUTOFF.1);
+            if hz >= 1000.0 {
+                format!("{:.1} kHz", hz / 1000.0)
+            } else {
+                format!("{hz:.0} Hz")
+            }
+        }
+        2 => format!("{:.0} Hz", v * v * ENV_AMOUNT),
+        4 => seconds(log_to(v, ATTACK.0, ATTACK.1)),
+        5 | 7 => seconds(log_to(v, DECAY.0, DECAY.1)),
+        _ => pct(),
+    }
+}
+
+/// The knobs' starting positions for a track's sound.
+pub fn default_params(sound: crate::clip::Sound) -> [f32; PARAMS] {
+    use crate::clip::Sound;
+    let preset = match sound {
+        Sound::Drums(_) => return [0.5, 1.0, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5],
+        Sound::Bass => BASS,
+        Sound::Pad => PAD,
+        Sound::Lead => LEAD,
+    };
+    preset.params()
+}
+
+impl Preset {
+    fn params(&self) -> [f32; PARAMS] {
+        [
+            log_from(self.cutoff, CUTOFF.0, CUTOFF.1),
+            (self.resonance / RESONANCE).clamp(0.0, 1.0),
+            (self.env_amount / ENV_AMOUNT).clamp(0.0, 1.0).sqrt(),
+            self.sub.clamp(0.0, 1.0),
+            log_from(self.attack, ATTACK.0, ATTACK.1),
+            log_from(self.decay, DECAY.0, DECAY.1),
+            self.sustain.clamp(0.0, 1.0),
+            log_from(self.release, DECAY.0, DECAY.1),
+        ]
+    }
+
+    fn set_param(&mut self, index: usize, v: f32) {
+        match index {
+            0 => self.cutoff = log_to(v, CUTOFF.0, CUTOFF.1),
+            1 => self.resonance = v * RESONANCE,
+            2 => self.env_amount = v * v * ENV_AMOUNT,
+            3 => self.sub = v,
+            4 => self.attack = log_to(v, ATTACK.0, ATTACK.1),
+            5 => self.decay = log_to(v, DECAY.0, DECAY.1),
+            6 => self.sustain = v,
+            7 => self.release = log_to(v, DECAY.0, DECAY.1),
+            _ => {}
         }
     }
 }
@@ -78,7 +219,16 @@ pub struct Drums {
     sounds: Vec<Arc<Sample>>,
     voices: [DrumVoice; DRUM_VOICES],
     gain: f32,
+    /// The Volume knob, as a gain.
+    volume: f32,
+    /// How much of each sound plays before it fades, 0..1.
+    length: f32,
+    /// Level knobs: kick, snare, hats, claps, perc, cymbals.
+    levels: [f32; 6],
 }
+
+/// Which level knob each of [`DRUM_NOTES`] follows.
+const DRUM_GROUP: [usize; 9] = [0, 1, 2, 2, 3, 4, 4, 5, 5];
 
 impl Drums {
     /// Kit `name` (one of [`kits::KITS`]) at the engine's `rate`.
@@ -92,6 +242,18 @@ impl Drums {
             sounds: kit.sounds.iter().map(|s| s.sample.clone()).collect(),
             voices: [DrumVoice::default(); DRUM_VOICES],
             gain,
+            volume: 1.0,
+            length: 1.0,
+            levels: [1.0; 6],
+        }
+    }
+
+    fn set_param(&mut self, index: usize, v: f32) {
+        match index {
+            0 => self.volume = level(v),
+            1 => self.length = v,
+            2..=7 => self.levels[index - 2] = level(v),
+            _ => {}
         }
     }
 
@@ -120,23 +282,30 @@ impl Drums {
         self.voices[slot] = DrumVoice {
             sound,
             pos: 0,
-            gain: velocity * self.gain,
+            gain: velocity * self.gain * self.levels[DRUM_GROUP[sound]],
             fade: 2.0,
             active: true,
         };
     }
 
     fn render(&mut self, out: &mut [[f32; 2]]) {
+        let volume = self.volume;
+        let length = self.length;
         for v in self.voices.iter_mut().filter(|v| v.active) {
             let sample = &self.sounds[v.sound];
             let len = sample.len();
+            // Past the Length knob's share of the sound, fade it out.
+            let cut = (len as f32 * length * length) as usize;
             for frame in out.iter_mut() {
                 if v.pos >= len || v.fade < 1e-4 {
                     v.active = false;
                     break;
                 }
+                if v.pos >= cut && v.fade > 1.0 {
+                    v.fade = 1.0;
+                }
                 let [l, r] = sample.frame(v.pos);
-                let g = v.gain * v.fade.min(1.0);
+                let g = v.gain * volume * v.fade.min(1.0);
                 frame[0] += l * g;
                 frame[1] += r * g;
                 v.pos += 1;
@@ -439,6 +608,25 @@ mod tests {
         s.render(&mut tail);
         assert!(s.voices.iter().all(|v| v.stage == Stage::Off));
         assert!(tail.iter().all(|f| f[0].is_finite() && f[1].is_finite()));
+    }
+
+    #[test]
+    fn knobs_start_where_the_presets_are() {
+        for preset in [BASS, PAD, LEAD] {
+            let mut p = preset;
+            for (i, v) in preset.params().into_iter().enumerate() {
+                p.set_param(i, v);
+            }
+            assert!((p.cutoff - preset.cutoff).abs() < 0.5);
+            assert!((p.attack - preset.attack).abs() < 1e-4);
+            assert!((p.release - preset.release).abs() < 1e-3);
+            assert!((p.env_amount - preset.env_amount).abs() < 1.0);
+        }
+        assert_eq!(
+            param_text(false, 0, log_from(1200.0, 40.0, 12_000.0)),
+            "1.2 kHz"
+        );
+        assert_eq!(param_text(true, 0, 0.5), "+0.0 dB");
     }
 
     #[test]

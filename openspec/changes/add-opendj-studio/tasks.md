@@ -8,13 +8,16 @@
 - [x] 1.4 Ableton Link: join the session, follow its tempo and phase, change the session's tempo
 - [x] 1.5 Offline render and a timing and CPU check (`opendj-studio --check`)
 - [ ] 1.6 Try it on macOS next to openDJ over Link
-- [x] 1.7 Window laid out like a Session view: browser, thinner tracks with mixer strips (volume and meters work), returns A and B and Main, and a device row for the selected track (sends, pan, browser and device controls are not connected yet)
+- [x] 1.7 Window laid out like a Session view: browser, thinner tracks with mixer strips (volume and meters work), returns A and B and Main, and a device row for the selected track (sends, returns, browser and effects are not connected yet)
 
 ## 2. Instruments and sets
 
 - [ ] 2.1 Plugin instruments on tracks through `opendj-plugin-host`
 - [ ] 2.2 Save and open a set
-- [ ] 2.3 Controllers: launch clips from a pad controller
+- [x] 2.3 Ableton Push 2 without Live: User mode, pads launch clips (Session) or play the selected instrument (Note), scene, stop and track buttons, transport, lights in track colours kept in time by MIDI clock, encoders on the instrument knobs or the mixer, and the screen over USB (`opendj-studio --push-preview`)
+- [x] 2.4 Instrument knobs and pan work, shared by the window and Push
+- [ ] 2.5 Try Push 2 on hardware (macOS)
+- [ ] 2.6 Novation Launchpad X in Programmer mode
 
 ## 3. Clip editing
 

@@ -37,3 +37,26 @@ The design follows a review of Suhina, transit, maolan and Ardour
 (`notes/daw-architecture-review.md` in the project files).
 
 openDJ never depends on this crate, so it can move to its own repository.
+
+## Ableton Push 2
+
+Plug in a Push 2 (with its power supply, for full brightness) and the
+studio picks it up within two seconds; Ableton Live doesn't need to run.
+If Live is open, set Push's Control Surface to None in Live's preferences,
+or Live takes the lights back.
+
+- Pads: the clip grid (Session) or the selected instrument (Note: drum pads,
+  or a keyboard in A minor going up a fourth per row; Octave buttons shift
+  it).
+- Scene buttons right of the pads launch scenes; Stop stops every clip.
+- Buttons over the screen stop a track; buttons under it select one.
+- Encoders: the selected instrument's eight knobs (Device), or volume, pan
+  and sends across the tracks (Mix; press Mix again or use Page for the
+  next control). The master encoder is the main volume, the tempo encoder
+  the tempo; hold Shift for fine steps.
+- Play starts and stops the transport; Quantize steps the launch quantise.
+
+`opendj-studio --push-preview push.png` draws what the screen shows.
+Code: `src/push/` (`surface.rs` for the controls and lights, `display.rs`
+for the screen); the protocol is Ableton's Push 2 MIDI and Display
+Interface Manual.

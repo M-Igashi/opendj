@@ -285,3 +285,57 @@ pub fn link() -> i32 {
         1
     }
 }
+
+/// Draws what Push 2's screen shows for the demo set, a clip playing on
+/// each track, into a PNG: once with the instrument knobs, once with the
+/// mixer.
+pub fn push_preview(path: &str) -> i32 {
+    use crate::control::{Controls, Mix};
+    use crate::push::display::{self, HEIGHT, WIDTH};
+    use crate::push::surface::{Encoders, Mode};
+
+    let set = clip::demo_set();
+    let (mut s, r) = Studio::new(&set, RATE, TEMPO);
+    let colors = [0xff8a65, 0x4fc3f7, 0xb69cff, 0xf48fb1];
+    let c = Controls::new(&set, &colors, r.commands, r.monitor.clone());
+    c.launch_scene(3);
+    c.select(1, Some(3));
+    c.set_mix(1, Mix::Pan, 0.35);
+    c.set_mix(2, Mix::Volume, 0.8);
+    let mut out = vec![[0.0; 2]; 256];
+    while s.clock.beat_now() < 9.5 {
+        s.process(&mut out);
+    }
+    let frames = [
+        display::draw(&c, Mode::Session, Encoders::Device),
+        display::draw(&c, Mode::Session, Encoders::Mix(Mix::Volume)),
+    ];
+    let gap = 12;
+    let height = HEIGHT * 2 + gap;
+    let mut rgb = vec![40u8; WIDTH * height * 3];
+    for (i, f) in frames.iter().enumerate() {
+        let start = i * (HEIGHT + gap) * WIDTH * 3;
+        let px = f.rgb();
+        rgb[start..start + px.len()].copy_from_slice(&px);
+    }
+    let result = std::fs::File::create(path)
+        .map_err(|e| e.to_string())
+        .and_then(|file| {
+            let mut enc =
+                png::Encoder::new(std::io::BufWriter::new(file), WIDTH as u32, height as u32);
+            enc.set_color(png::ColorType::Rgb);
+            enc.set_depth(png::BitDepth::Eight);
+            let mut w = enc.write_header().map_err(|e| e.to_string())?;
+            w.write_image_data(&rgb).map_err(|e| e.to_string())
+        });
+    match result {
+        Ok(()) => {
+            println!("wrote {path}");
+            0
+        }
+        Err(e) => {
+            eprintln!("{path}: {e}");
+            1
+        }
+    }
+}
