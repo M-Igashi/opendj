@@ -2176,6 +2176,77 @@ fn ddj_flx10_pad_colours_lights_and_jog_scale() {
 }
 
 #[test]
+fn ddj_flx10_browse_loops_deck_select_and_search() {
+    let (reg, mut c) = load("Pioneer-DDJ-FLX10.midi.xml");
+    settle(&mut c, 50);
+
+    // BROWSE press (sent as LOAD for the side's deck): in the folders it
+    // opens the picked item, in the track list it loads the track.
+    let focus = reg.free("[Library]", "focused_widget");
+    let go = reg.free("[Library]", "GoToItem");
+    let load3 = reg.free("[Channel3]", "LoadSelectedTrack");
+    focus.set(2.0);
+    c.receive(&[0x96, 0x48, 0x7F]);
+    c.receive(&[0x96, 0x48, 0x00]);
+    assert_eq!(go.get(), 1.0);
+    assert_eq!(load3.get(), 0.0);
+    go.set(0.0);
+    focus.set(3.0);
+    c.receive(&[0x96, 0x48, 0x7F]);
+    assert_eq!(go.get(), 0.0);
+    assert_eq!(load3.get(), 1.0);
+
+    // LOOP IN・1/2X and LOOP OUT・2X set the loop, and halve and double
+    // it while it plays; the release goes where the press went.
+    c.receive(&[0x90, 0x10, 0x7F]);
+    assert_eq!(get(&reg, "[Channel1]", "loop_in"), 1.0);
+    c.receive(&[0x90, 0x10, 0x00]);
+    assert_eq!(get(&reg, "[Channel1]", "loop_in"), 0.0);
+    reg.get("[Channel1]", "loop_enabled").unwrap().set(1.0);
+    c.receive(&[0x90, 0x10, 0x7F]);
+    assert_eq!(get(&reg, "[Channel1]", "loop_halve"), 1.0);
+    assert_eq!(get(&reg, "[Channel1]", "loop_in"), 0.0);
+    c.receive(&[0x90, 0x10, 0x00]);
+    assert_eq!(get(&reg, "[Channel1]", "loop_halve"), 0.0);
+    c.receive(&[0x90, 0x11, 0x7F]);
+    assert_eq!(get(&reg, "[Channel1]", "loop_double"), 1.0);
+    c.receive(&[0x90, 0x11, 0x00]);
+    c.receive(&[0x91, 0x13, 0x7F]);
+    assert_eq!(get(&reg, "[Channel2]", "loop_double"), 1.0);
+    c.receive(&[0x91, 0x13, 0x00]);
+
+    // 4 BEAT JUMP held searches while held.
+    c.receive(&[0x92, 0x71, 0x7F]);
+    assert!(get(&reg, "[Channel3]", "rateSearch") > 0.0);
+    c.receive(&[0x92, 0x71, 0x00]);
+    assert_eq!(get(&reg, "[Channel3]", "rateSearch"), 0.0);
+    c.receive(&[0x90, 0x70, 0x7F]);
+    assert!(get(&reg, "[Channel1]", "rateSearch") < 0.0);
+    c.receive(&[0x90, 0x70, 0x00]);
+
+    // DECK 3 on the left: 4-Deck opens and lights deck 3; DECK 1 goes back.
+    let layout = reg.free("[Skin]", "layout");
+    let deck3 = reg.free("[Controller]", "deck3");
+    c.receive(&[0x92, 0x3C, 0x7F]);
+    c.receive(&[0x90, 0x3C, 0x00]);
+    assert_eq!(layout.get(), 2.0);
+    assert_eq!(deck3.get(), 1.0);
+    c.receive(&[0x90, 0x3C, 0x7F]);
+    c.receive(&[0x92, 0x3C, 0x00]);
+    assert_eq!(deck3.get(), 0.0);
+    assert_eq!(layout.get(), 2.0);
+
+    // SHIFT + a SOUND COLOR FX button picks it too.
+    c.receive(&[0x96, 0x09, 0x7F]);
+    assert_eq!(
+        get(&reg, "[QuickEffectRack1_[Channel2]]", "loaded_chain_preset"),
+        3.0
+    );
+    assert_eq!(c.errors(), Vec::<String>::new());
+    c.shutdown();
+}
+
+#[test]
 fn ddj_400_secondary_pad_modes() {
     let (reg, mut c) = load("Pioneer-DDJ-400.midi.xml");
     for (deck, status) in [(1, 0x97), (2, 0x99)] {

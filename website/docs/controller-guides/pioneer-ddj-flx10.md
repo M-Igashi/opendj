@@ -13,6 +13,11 @@ so it works the same way where they share controls.
 
 - **DECK 1/3** and **DECK 2/4** pick the deck each side plays; each deck
   sends on its own MIDI channel, and the mixer always has all four channels.
+  Picking deck 3 or 4 opens the 4-Deck layout, where the deck number the
+  side plays is lit.
+- **BROWSE**: turn to move, press to open the folder or playlist picked in
+  the folders pane, or to load the track picked in the list onto the side's
+  deck. **BACK** goes back to the folders.
 - **Pads**: the pad mode buttons open the deck's pad pages (HOT CUE, PAD FX,
   BEAT JUMP, SAMPLER, and with SHIFT KEYBOARD, PAD FX 2, BEAT LOOP and KEY
   SHIFT). The pads play whatever page the deck shows on screen.
@@ -22,7 +27,7 @@ so it works the same way where they share controls.
   lets the tail ring out) and **BEAT ◀ ▶** halve and double its length
   (SHIFT: AUTO and TAP tempo).
 - **SOUND COLOR FX**: SPACE, D.ECHO, CRUSH, NOISE and FILTER pick what the
-  COLOR knobs play.
+  COLOR knobs play. openDJ has no PITCH Color FX yet.
 - **ACTIVE PART** DRUMS, VOCAL and INST mute and unmute those stems of the
   deck: lit while they play, dimmed when muted.
 - The **pads** light in colour: hot cues in the colours they have on
@@ -35,9 +40,11 @@ so it works the same way where they share controls.
   **KEY SYNC** matches the key of the other deck (SHIFT: back to the
   track's key), **TEMPO RESET** puts the tempo back to 0 (SHIFT: next
   tempo range).
-- **4 BEAT JUMP ◀ ▶** jump 4 beats; **4 BEAT/EXIT** sets a 4-beat loop or
-  ends one; **CUE/LOOP CALL** halves and doubles a loop; SHIFT + LOOP IN or
-  LOOP OUT lets the jog move that end of the loop.
+- **4 BEAT JUMP ◀ ▶** jump 4 beats, and search back or forward while held;
+  **4 BEAT/EXIT** sets a 4-beat loop or ends one; **LOOP IN・1/2X** and
+  **LOOP OUT・2X** set a loop, and halve and double it while it plays, as
+  **CUE/LOOP CALL** does; SHIFT + LOOP IN or LOOP OUT lets the jog move that
+  end of the loop.
 - **SLIP**, **SLIP REVERSE** and **QUANTIZE** do what they say.
 - **CROSSFADER ASSIGN** puts each channel on side A, THRU or B.
 - The jog displays show the playhead going round, the cue point, the BPM,
