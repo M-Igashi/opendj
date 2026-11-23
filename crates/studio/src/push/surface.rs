@@ -193,6 +193,8 @@ pub struct Surface {
     /// What each light was last told; None until first sent.
     pads: [Option<Led>; 64],
     buttons: [Option<Led>; 128],
+    /// The encoder a finger rests on.
+    touched: Option<usize>,
 }
 
 impl Default for Surface {
@@ -211,7 +213,13 @@ impl Surface {
             held: [None; 64],
             pads: [None; 64],
             buttons: [None; 128],
+            touched: None,
         }
+    }
+
+    /// The encoder (0..8) a finger rests on, if any.
+    pub fn touched(&self) -> Option<usize> {
+        self.touched
     }
 
     /// Forgets what the lights show, so the next [`Surface::lights`] sends
@@ -231,6 +239,15 @@ impl Surface {
             0x90 | 0x80 if (PAD_FIRST..=PAD_LAST).contains(&data1) => {
                 let velocity = if status & 0xF0 == 0x80 { 0 } else { data2 };
                 self.pad((data1 - PAD_FIRST) as usize, velocity, c);
+            }
+            // Encoder touch: notes 0-7.
+            0x90 | 0x80 if data1 < 8 => {
+                let i = data1 as usize;
+                if status & 0xF0 == 0x90 && data2 > 0 {
+                    self.touched = Some(i);
+                } else if self.touched == Some(i) {
+                    self.touched = None;
+                }
             }
             0xB0 => {
                 if (ENCODER_FIRST..ENCODER_FIRST + 8).contains(&data1)

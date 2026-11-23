@@ -183,8 +183,15 @@ fn run(c: Arc<Controls>, stop: Arc<AtomicBool>, status: Status) {
     let mut last_try = Instant::now() - Duration::from_secs(10);
     let mut last_frame = Instant::now() - Duration::from_secs(10);
     let mut last_screen_try = Instant::now() - Duration::from_secs(10);
-    let mut last_version = 0u64;
-    let mut last_beat = -1i64;
+    // Slint components stay on the thread that made them, so the screen's
+    // renderer is made here.
+    let mut renderer = match display::Renderer::new() {
+        Ok(r) => Some(r),
+        Err(e) => {
+            eprintln!("{e}");
+            None
+        }
+    };
     while !stop.load(Ordering::Relaxed) {
         if conn.is_none() && last_try.elapsed() > Duration::from_secs(2) {
             last_try = Instant::now();
@@ -233,21 +240,18 @@ fn run(c: Arc<Controls>, stop: Arc<AtomicBool>, status: Status) {
                 }
             }
         }
-        if let Some(s) = screen.as_ref() {
-            // Redraw on a change, on each beat, and at least twice a second
-            // (the screen goes dark after two seconds without a frame).
-            let version = c.version();
-            let beat = c.monitor.beat().floor() as i64;
-            let due = version != last_version
-                || beat != last_beat
-                || last_frame.elapsed() > Duration::from_millis(500);
-            if due && last_frame.elapsed() > Duration::from_millis(30) {
-                last_version = version;
-                last_beat = beat;
-                last_frame = Instant::now();
-                let frame = display::draw(&c, surface.mode, surface.encoders);
-                if s.send(&frame).is_err() {
-                    screen = None;
+        if let (Some(s), Some(r)) = (screen.as_ref(), renderer.as_mut()) {
+            // Runs the screen's animations up to 60 times a second, and
+            // sends at least twice a second (the screen goes dark after
+            // two seconds without a frame).
+            if last_frame.elapsed() > Duration::from_millis(16) {
+                r.update(&c, &surface);
+                let changed = r.draw();
+                if changed || last_frame.elapsed() > Duration::from_millis(500) {
+                    last_frame = Instant::now();
+                    if s.send(r.frame()).is_err() {
+                        screen = None;
+                    }
                 }
             }
         }

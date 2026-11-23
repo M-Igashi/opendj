@@ -18,6 +18,8 @@
 - [x] 2.4 Instrument knobs and pan work, shared by the window and Push
 - [x] 2.5 Try Push 2 on hardware (macOS)
 - [ ] 2.6 Novation Launchpad X in Programmer mode
+- [x] 2.7 Push screen drawn with Slint's software renderer on the Push thread: knob arcs, track tabs with clip progress, page toasts, animated
+- [ ] 2.8 Try the Slint-drawn Push screen on hardware (macOS)
 
 ## 3. Clip editing
 

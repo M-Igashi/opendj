@@ -1,25 +1,30 @@
-//! Push 2's screen: 960 x 160 pixels sent over USB. Drawn with
-//! embedded-graphics into a frame buffer, then encoded as the manual's
-//! "Display Interface" chapter asks: a 16-byte header, then 160 lines of
-//! 1920 bytes of pixels and 128 filler bytes, XORed with a fixed pattern.
+//! Push 2's screen: 960 x 160 pixels sent over USB, drawn by Slint's
+//! software renderer (`ui/push.slint`) on the Push thread.
+//!
+//! Slint keeps its platform per thread, so the Push thread installs its own:
+//! one off-screen software window, while the main thread keeps the normal
+//! windowing backend. Frames are encoded as the manual's "Display Interface"
+//! chapter asks: a 16-byte header, then 160 lines of 1920 bytes of pixels
+//! and 128 filler bytes, XORed with a fixed pattern.
 
-use std::time::Duration;
+use std::cell::RefCell;
+use std::rc::Rc;
+use std::time::{Duration, Instant};
 
-use embedded_graphics::mono_font::ascii::{FONT_10X20, FONT_6X10, FONT_7X13, FONT_9X15_BOLD};
-use embedded_graphics::mono_font::{MonoFont, MonoTextStyle};
-use embedded_graphics::pixelcolor::{Bgr565, RgbColor};
-use embedded_graphics::prelude::*;
-use embedded_graphics::primitives::{PrimitiveStyle, Rectangle};
-use embedded_graphics::text::{Alignment, Baseline, Text, TextStyleBuilder};
+use slint::platform::software_renderer::{
+    MinimalSoftwareWindow, PremultipliedRgbaColor, RepaintBufferType, TargetPixel,
+};
+use slint::platform::{Platform, WindowAdapter};
+use slint::{Color, ComponentHandle, ModelRc, VecModel};
 
-use super::surface::{Encoders, Mode};
+use super::surface::{Encoders, Mode, Surface};
 use crate::control::{fader_text, pan_text, Controls, Mix};
 use crate::sound::PARAMS;
+use crate::{PushKnob, PushScreen, PushTrack};
 
 pub const WIDTH: usize = 960;
 pub const HEIGHT: usize = 160;
 const LINE_BYTES: usize = 2048;
-const COLUMN: i32 = 120;
 
 const VENDOR: u16 = 0x2982;
 const PRODUCT: u16 = 0x1967;
@@ -27,9 +32,36 @@ const ENDPOINT: u8 = 0x01;
 const HEADER: [u8; 16] = [0xFF, 0xCC, 0xAA, 0x88, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0];
 const MASK: [u8; 4] = [0xE7, 0xF3, 0xE7, 0xFF];
 
+/// A pixel as Push wants it: 16 bits, blue high, red low.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct Bgr565(pub u16);
+
+impl Bgr565 {
+    fn rgb(self) -> (u8, u8, u8) {
+        let v = self.0;
+        let r = (v & 0x1F) as u8;
+        let g = ((v >> 5) & 0x3F) as u8;
+        let b = (v >> 11) as u8;
+        (r << 3 | r >> 2, g << 2 | g >> 4, b << 3 | b >> 2)
+    }
+}
+
+impl TargetPixel for Bgr565 {
+    fn blend(&mut self, c: PremultipliedRgbaColor) {
+        let (r, g, b) = self.rgb();
+        let a = (255 - c.alpha) as u16;
+        let mix = |x: u8, add: u8| ((x as u16 * a / 255) as u8).saturating_add(add);
+        *self = Bgr565::from_rgb(mix(r, c.red), mix(g, c.green), mix(b, c.blue));
+    }
+
+    fn from_rgb(r: u8, g: u8, b: u8) -> Self {
+        Bgr565((b as u16 >> 3) << 11 | (g as u16 >> 2) << 5 | r as u16 >> 3)
+    }
+}
+
 /// One screen's pixels, top line first.
 pub struct Frame {
-    pixels: Vec<u16>,
+    pixels: Vec<Bgr565>,
 }
 
 impl Default for Frame {
@@ -41,7 +73,7 @@ impl Default for Frame {
 impl Frame {
     pub fn new() -> Frame {
         Frame {
-            pixels: vec![0; WIDTH * HEIGHT],
+            pixels: vec![Bgr565(0); WIDTH * HEIGHT],
         }
     }
 
@@ -51,7 +83,7 @@ impl Frame {
         for (y, line) in self.pixels.chunks(WIDTH).enumerate() {
             let row = &mut out[y * LINE_BYTES..(y + 1) * LINE_BYTES];
             for (x, p) in line.iter().enumerate() {
-                row[2 * x..2 * x + 2].copy_from_slice(&p.to_le_bytes());
+                row[2 * x..2 * x + 2].copy_from_slice(&p.0.to_le_bytes());
             }
         }
         for (i, b) in out.iter_mut().enumerate() {
@@ -63,239 +95,224 @@ impl Frame {
     /// The frame as 8-bit RGB, for a preview image.
     pub fn rgb(&self) -> Vec<u8> {
         let mut out = Vec::with_capacity(WIDTH * HEIGHT * 3);
-        for &p in &self.pixels {
-            let c = Bgr565::from(embedded_graphics::pixelcolor::raw::RawU16::new(p));
-            out.push(c.r() << 3 | c.r() >> 2);
-            out.push(c.g() << 2 | c.g() >> 4);
-            out.push(c.b() << 3 | c.b() >> 2);
+        for p in &self.pixels {
+            let (r, g, b) = p.rgb();
+            out.extend_from_slice(&[r, g, b]);
         }
         out
     }
 }
 
-impl OriginDimensions for Frame {
-    fn size(&self) -> Size {
-        Size::new(WIDTH as u32, HEIGHT as u32)
+// ------------------------------------------------------------ rendering
+
+/// The Push thread's Slint platform: one off-screen window.
+struct Offscreen {
+    window: Rc<MinimalSoftwareWindow>,
+    start: Instant,
+}
+
+impl Platform for Offscreen {
+    fn create_window_adapter(&self) -> Result<Rc<dyn WindowAdapter>, slint::PlatformError> {
+        Ok(self.window.clone())
+    }
+
+    fn duration_since_start(&self) -> Duration {
+        self.start.elapsed()
     }
 }
 
-impl DrawTarget for Frame {
-    type Color = Bgr565;
-    type Error = std::convert::Infallible;
+thread_local! {
+    static WINDOW: RefCell<Option<Rc<MinimalSoftwareWindow>>> = const { RefCell::new(None) };
+}
 
-    fn draw_iter<I>(&mut self, pixels: I) -> Result<(), Self::Error>
-    where
-        I: IntoIterator<Item = Pixel<Self::Color>>,
-    {
-        for Pixel(p, c) in pixels {
-            if p.x >= 0 && p.y >= 0 && (p.x as usize) < WIDTH && (p.y as usize) < HEIGHT {
-                self.pixels[p.y as usize * WIDTH + p.x as usize] = c.into_storage();
-            }
+/// This thread's off-screen window, installing the platform the first time.
+fn window() -> Result<Rc<MinimalSoftwareWindow>, String> {
+    WINDOW.with(|w| {
+        if let Some(w) = w.borrow().as_ref() {
+            return Ok(w.clone());
         }
-        Ok(())
-    }
+        let window = MinimalSoftwareWindow::new(RepaintBufferType::ReusedBuffer);
+        slint::platform::set_platform(Box::new(Offscreen {
+            window: window.clone(),
+            start: Instant::now(),
+        }))
+        .map_err(|e| format!("Push screen: {e}"))?;
+        *w.borrow_mut() = Some(window.clone());
+        Ok(window)
+    })
 }
 
-fn color(rgb: u32) -> Bgr565 {
-    Bgr565::new(
-        ((rgb >> 16) as u8) >> 3,
-        ((rgb >> 8) as u8) >> 2,
-        (rgb as u8) >> 3,
-    )
+fn color(rgb: u32) -> Color {
+    Color::from_rgb_u8((rgb >> 16) as u8, (rgb >> 8) as u8, rgb as u8)
 }
 
-const TEXT: u32 = 0xe8e8ea;
-const DIM: u32 = 0x8b8d91;
-const FAINT: u32 = 0x3a3d40;
 const ACCENT: u32 = 0xb69cff;
-const RED: u32 = 0xff5040;
 
-fn text(frame: &mut Frame, s: &str, x: i32, y: i32, font: &MonoFont, rgb: u32, align: Alignment) {
-    let style = MonoTextStyle::new(font, color(rgb));
-    let layout = TextStyleBuilder::new()
-        .alignment(align)
-        .baseline(Baseline::Top)
-        .build();
-    let _ = Text::with_text_style(s, Point::new(x, y), style, layout).draw(frame);
+/// Draws the Push screen. Lives on one thread (Slint components can't move
+/// between threads).
+pub struct Renderer {
+    window: Rc<MinimalSoftwareWindow>,
+    ui: PushScreen,
+    tracks: Rc<VecModel<PushTrack>>,
+    knobs: Rc<VecModel<PushKnob>>,
+    frame: Frame,
+    /// The page last shown, to flash its name when it changes.
+    page: Option<(Mode, Encoders)>,
+    toast_until: Option<Instant>,
 }
 
-fn rect(frame: &mut Frame, x: i32, y: i32, w: u32, h: u32, rgb: u32) {
-    let _ = Rectangle::new(Point::new(x, y), Size::new(w, h))
-        .into_styled(PrimitiveStyle::with_fill(color(rgb)))
-        .draw(frame);
-}
-
-/// Cuts `s` to `chars` characters.
-fn fit(s: &str, chars: usize) -> String {
-    s.chars().take(chars).collect()
-}
-
-/// One encoder's column: name, value and a bar.
-fn knob(frame: &mut Frame, i: i32, name: &str, value: &str, amount: f32, bipolar: bool, rgb: u32) {
-    let x = i * COLUMN;
-    let cx = x + COLUMN / 2;
-    text(
-        frame,
-        &fit(name, 16),
-        cx,
-        34,
-        &FONT_7X13,
-        DIM,
-        Alignment::Center,
-    );
-    text(
-        frame,
-        &fit(value, 11),
-        cx,
-        56,
-        &FONT_10X20,
-        TEXT,
-        Alignment::Center,
-    );
-    let (bx, bw) = (x + 12, (COLUMN - 24) as u32);
-    rect(frame, bx, 92, bw, 6, FAINT);
-    let a = amount.clamp(0.0, 1.0);
-    if bipolar {
-        let mid = bx + bw as i32 / 2;
-        let end = bx + (a * bw as f32) as i32;
-        let (lo, hi) = if end < mid { (end, mid) } else { (mid, end) };
-        rect(frame, lo, 92, (hi - lo).max(2) as u32, 6, rgb);
-    } else {
-        rect(frame, bx, 92, (a * bw as f32) as u32, 6, rgb);
+impl Renderer {
+    pub fn new() -> Result<Renderer, String> {
+        let window = window()?;
+        let ui = PushScreen::new().map_err(|e| e.to_string())?;
+        ui.show().map_err(|e| e.to_string())?;
+        window.set_size(slint::PhysicalSize::new(WIDTH as u32, HEIGHT as u32));
+        let tracks = Rc::new(VecModel::default());
+        let knobs = Rc::new(VecModel::default());
+        ui.set_tracks(ModelRc::from(tracks.clone()));
+        ui.set_knobs(ModelRc::from(knobs.clone()));
+        Ok(Renderer {
+            window,
+            ui,
+            tracks,
+            knobs,
+            frame: Frame::new(),
+            page: None,
+            toast_until: None,
+        })
     }
-}
 
-/// Draws what Push shows: the encoders' knobs in the middle, Stop labels
-/// over the upper buttons, track names over the lower ones.
-pub fn draw(c: &Controls, mode: Mode, encoders: Encoders) -> Frame {
-    let mut f = Frame::new();
-    let m = &c.monitor;
-    let tracks = c.tracks.len();
-    let selected = c.selected_track();
+    /// Copies the studio's state into the screen.
+    pub fn update(&mut self, c: &Controls, surface: &Surface) {
+        let m = &c.monitor;
+        let selected = c.selected_track();
+        let tracks: Vec<PushTrack> = c
+            .tracks
+            .iter()
+            .enumerate()
+            .take(8)
+            .map(|(t, info)| PushTrack {
+                name: info.name.as_str().into(),
+                color: color(info.color),
+                selected: t == selected,
+                progress: m.progress(t),
+                stopping: m.stopping(t),
+            })
+            .collect();
+        set_rows(&self.tracks, tracks);
 
-    // Upper row: Stop over each playing track.
-    for t in 0..tracks.min(8) {
-        if m.progress(t) >= 0.0 {
-            let rgb = if m.stopping(t) { RED } else { DIM };
-            text(
-                &mut f,
-                "STOP",
-                t as i32 * COLUMN + COLUMN / 2,
-                4,
-                &FONT_6X10,
-                rgb,
-                Alignment::Center,
-            );
-        }
-    }
-    // Where we are, top right.
-    let title = match (mode, encoders) {
-        (Mode::Note, _) => format!("Note | {}", c.tracks[selected].name),
-        (_, Encoders::Device) => {
-            let name = &c.tracks[selected].name;
-            format!("Device | {name}")
-        }
-        (_, Encoders::Mix(mix)) => format!("Mix | {}", mix.label()),
-    };
-    let beat = m.beat();
-    let bar = (beat / 4.0).floor() as i64 + 1;
-    let in_bar = beat.rem_euclid(4.0).floor() as i64 + 1;
-    let status = format!(
-        "{title}   {:.1} BPM   {bar}.{in_bar}{}",
-        m.tempo(),
-        if m.playing() { "" } else { "  stopped" }
-    );
-    text(
-        &mut f,
-        &status,
-        WIDTH as i32 - 8,
-        4,
-        &FONT_6X10,
-        ACCENT,
-        Alignment::Right,
-    );
-    rect(&mut f, 0, 18, WIDTH as u32, 1, FAINT);
-
-    // Encoders.
-    match encoders {
-        Encoders::Device => {
-            let rgb = c.tracks[selected].color;
-            for i in 0..PARAMS {
-                knob(
-                    &mut f,
-                    i as i32,
-                    c.param_name(selected, i),
-                    &c.param_text(selected, i),
-                    c.param(selected, i),
-                    false,
-                    rgb,
-                );
+        let knobs: Vec<PushKnob> = match surface.encoders {
+            Encoders::Device => {
+                let rgb = color(c.tracks[selected].color);
+                (0..PARAMS)
+                    .map(|i| PushKnob {
+                        name: c.param_name(selected, i).into(),
+                        text: c.param_text(selected, i).into(),
+                        value: c.param(selected, i),
+                        bipolar: false,
+                        color: rgb,
+                    })
+                    .collect()
             }
-        }
-        Encoders::Mix(mix) => {
-            for (t, info) in c.tracks.iter().enumerate().take(8) {
-                let v = c.mix(t, mix);
-                let value = match mix {
-                    Mix::Volume => format!("{} dB", fader_text(v)),
-                    Mix::Pan => pan_text(v),
-                    Mix::SendA | Mix::SendB => format!("{:.0}%", v * 100.0),
-                };
-                knob(
-                    &mut f,
-                    t as i32,
-                    &info.name,
-                    &value,
-                    v,
-                    mix == Mix::Pan,
-                    info.color,
-                );
+            Encoders::Mix(mix) => {
+                let mut v: Vec<PushKnob> = c
+                    .tracks
+                    .iter()
+                    .enumerate()
+                    .take(8)
+                    .map(|(t, info)| {
+                        let x = c.mix(t, mix);
+                        PushKnob {
+                            name: info.name.as_str().into(),
+                            text: match mix {
+                                Mix::Volume => format!("{} dB", fader_text(x)),
+                                Mix::Pan => pan_text(x),
+                                Mix::SendA | Mix::SendB => format!("{:.0}%", x * 100.0),
+                            }
+                            .into(),
+                            value: x,
+                            bipolar: mix == Mix::Pan,
+                            color: color(info.color),
+                        }
+                    })
+                    .collect();
+                while v.len() < 7 {
+                    v.push(PushKnob::default());
+                }
+                if v.len() < 8 {
+                    let x = c.main_volume();
+                    v.push(PushKnob {
+                        name: "Main".into(),
+                        text: format!("{} dB", fader_text(x)).into(),
+                        value: x,
+                        bipolar: false,
+                        color: color(ACCENT),
+                    });
+                }
+                v
             }
-            if tracks < 8 {
-                let v = c.main_volume();
-                knob(
-                    &mut f,
-                    7,
-                    "Main",
-                    &format!("{} dB", fader_text(v)),
-                    v,
-                    false,
-                    ACCENT,
-                );
-            }
+        };
+        set_rows(&self.knobs, knobs);
+
+        let name = &c.tracks[selected].name;
+        let title = match (surface.mode, surface.encoders) {
+            (Mode::Note, _) => format!("Note · {name}"),
+            (_, Encoders::Device) => format!("Device · {name}"),
+            (_, Encoders::Mix(mix)) => format!("Mix · {}", mix.label()),
+        };
+        let page = (surface.mode, surface.encoders);
+        if self.page.is_some_and(|p| p != page) {
+            self.ui.set_toast(title.as_str().into());
+            self.ui.set_toast_visible(true);
+            self.toast_until = Some(Instant::now() + Duration::from_millis(900));
         }
+        self.page = Some(page);
+        if self.toast_until.is_some_and(|t| Instant::now() > t) {
+            self.ui.set_toast_visible(false);
+            self.toast_until = None;
+        }
+        self.ui.set_heading(title.into());
+        self.ui
+            .set_touched(surface.touched().map_or(-1, |t| t as i32));
+        let beat = m.beat();
+        let bar = (beat / 4.0).floor() as i64 + 1;
+        let in_bar = beat.rem_euclid(4.0).floor() as i64 + 1;
+        self.ui.set_tempo(format!("{:.1} BPM", m.tempo()).into());
+        self.ui.set_position(format!("{bar}.{in_bar}").into());
+        self.ui.set_playing(m.playing());
+        self.ui.set_beat(beat as f32);
     }
 
-    // Lower row: the tracks, the selected one filled.
-    rect(&mut f, 0, 133, WIDTH as u32, 1, FAINT);
-    for (t, info) in c.tracks.iter().enumerate().take(8) {
-        let x = t as i32 * COLUMN;
-        let playing = m.progress(t) >= 0.0;
-        let label = format!("{}{}", if playing { "> " } else { "" }, fit(&info.name, 10));
-        if t == selected {
-            rect(&mut f, x + 4, 138, (COLUMN - 8) as u32, 20, info.color);
-            text(
-                &mut f,
-                &label,
-                x + COLUMN / 2,
-                141,
-                &FONT_9X15_BOLD,
-                0x101112,
-                Alignment::Center,
-            );
-        } else {
-            text(
-                &mut f,
-                &label,
-                x + COLUMN / 2,
-                141,
-                &FONT_9X15_BOLD,
-                info.color,
-                Alignment::Center,
-            );
+    /// Runs Slint's animations and redraws what changed; true when the
+    /// frame changed.
+    pub fn draw(&mut self) -> bool {
+        slint::platform::update_timers_and_animations();
+        let frame = &mut self.frame;
+        self.window.draw_if_needed(|r| {
+            r.render(&mut frame.pixels, WIDTH);
+        })
+    }
+
+    pub fn frame(&self) -> &Frame {
+        &self.frame
+    }
+}
+
+/// Replaces `model`'s rows, touching only those that changed.
+fn set_rows<T: Clone + PartialEq + 'static>(model: &VecModel<T>, rows: Vec<T>) {
+    use slint::Model;
+    if model.row_count() != rows.len() {
+        model.set_vec(rows);
+        return;
+    }
+    for (i, row) in rows.into_iter().enumerate() {
+        if model.row_data(i).as_ref() != Some(&row) {
+            model.set_row_data(i, row);
         }
     }
-    f
 }
+
+// ------------------------------------------------------------------ USB
 
 /// The open screen.
 pub struct Screen {
@@ -336,8 +353,9 @@ mod tests {
     fn frames_encode_as_push_expects() {
         let mut f = Frame::new();
         // Top-left pixel pure red: red is the low 5 bits.
-        f.pixels[0] = color(0xff0000).into_storage();
-        assert_eq!(f.pixels[0], 0x001F);
+        f.pixels[0] = Bgr565::from_rgb(255, 0, 0);
+        assert_eq!(f.pixels[0].0, 0x001F);
+        assert_eq!(Bgr565::from_rgb(0, 0, 255).0, 0xF800);
         let data = f.encode();
         assert_eq!(data.len(), 160 * 2048);
         // 0x1F ^ 0xE7, 0x00 ^ 0xF3; black elsewhere is the mask itself.
@@ -347,14 +365,30 @@ mod tests {
     }
 
     #[test]
+    fn blending_half_white_over_black() {
+        let mut p = Bgr565(0);
+        p.blend(PremultipliedRgbaColor {
+            red: 128,
+            green: 128,
+            blue: 128,
+            alpha: 128,
+        });
+        let (r, g, b) = p.rgb();
+        assert!((120..=136).contains(&r) && (120..=136).contains(&g) && (120..=136).contains(&b));
+    }
+
+    #[test]
     fn draws_the_tracks_and_knobs() {
         let set = crate::clip::demo_set();
         let (tx, _rx) = rtrb::RingBuffer::new(8);
         let monitor = crate::engine::Studio::new(&set, 48_000.0, 120.0).1.monitor;
         let c = Controls::new(&set, &[0xff8a65, 0x4fc3f7, 0xb69cff, 0xf48fb1], tx, monitor);
-        let f = draw(&c, Mode::Session, Encoders::Device);
-        // The selected track's name sits on a fill of its colour.
-        assert_eq!(f.pixels[150 * WIDTH + 8], color(0xff8a65).into_storage());
-        assert!(f.pixels.iter().filter(|p| **p != 0).count() > 2000);
+        let mut r = Renderer::new().expect("off-screen renderer");
+        r.update(&c, &Surface::new());
+        assert!(r.draw());
+        // The selected track's tab is filled with its colour (after its
+        // fill animation), and the knobs drew something.
+        let lit = r.frame().pixels.iter().filter(|p| p.0 != 0).count();
+        assert!(lit > 10_000, "{lit} pixels lit");
     }
 }

@@ -292,7 +292,7 @@ pub fn link() -> i32 {
 pub fn push_preview(path: &str) -> i32 {
     use crate::control::{Controls, Mix};
     use crate::push::display::{self, HEIGHT, WIDTH};
-    use crate::push::surface::{Encoders, Mode};
+    use crate::push::surface::{Encoders, Surface};
 
     let set = clip::demo_set();
     let (mut s, r) = Studio::new(&set, RATE, TEMPO);
@@ -306,17 +306,32 @@ pub fn push_preview(path: &str) -> i32 {
     while s.clock.beat_now() < 9.5 {
         s.process(&mut out);
     }
-    let frames = [
-        display::draw(&c, Mode::Session, Encoders::Device),
-        display::draw(&c, Mode::Session, Encoders::Mix(Mix::Volume)),
-    ];
+    let mut renderer = match display::Renderer::new() {
+        Ok(r) => r,
+        Err(e) => {
+            eprintln!("{e}");
+            return 1;
+        }
+    };
+    let mut surface = Surface::new();
+    let mut frames = Vec::new();
+    for encoders in [Encoders::Device, Encoders::Mix(Mix::Volume)] {
+        surface.encoders = encoders;
+        // Let the animations (and the page-name toast) finish.
+        let start = std::time::Instant::now();
+        while start.elapsed() < std::time::Duration::from_millis(1200) {
+            renderer.update(&c, &surface);
+            renderer.draw();
+            std::thread::sleep(std::time::Duration::from_millis(16));
+        }
+        frames.push(renderer.frame().rgb());
+    }
     let gap = 12;
     let height = HEIGHT * 2 + gap;
     let mut rgb = vec![40u8; WIDTH * height * 3];
     for (i, f) in frames.iter().enumerate() {
         let start = i * (HEIGHT + gap) * WIDTH * 3;
-        let px = f.rgb();
-        rgb[start..start + px.len()].copy_from_slice(&px);
+        rgb[start..start + f.len()].copy_from_slice(f);
     }
     let result = std::fs::File::create(path)
         .map_err(|e| e.to_string())
