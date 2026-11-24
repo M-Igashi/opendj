@@ -8,7 +8,7 @@ import { Theme, CloseIcon } from "theme.slint";
 import { Controls } from "controls.slint";
 import { DisplayView } from "plugin_display.slint";
 import { SwitchPill } from "pills.slint";
-import { InstrumentsUi, InstrumentTree, InstrumentList } from "instruments.slint";
+import { InstrumentsUi, JamColumn, JamHint } from "instruments.slint";
 
 // The plugin's format, as on the instrument deck's title.
 component Chip inherits Rectangle {
@@ -213,13 +213,13 @@ export component PluginPanel inherits Rectangle {
     }
 }
 
-// The Jam source's page: the tree, and the list or, with `plugin` on,
-// the instrument's plugin panel in its place.
+// The Jam source's page: the column, and beside it the instrument's
+// plugin panel with `plugin` on, or a hint.
 export component InstrumentsPanel inherits HorizontalLayout {
     in property <int> decks: 2;
     in property <bool> plugin;
-    InstrumentTree {}
+    JamColumn { decks: decks; }
     Rectangle { width: 1px; background: Theme.separator; }
-    if !plugin: InstrumentList { decks: decks; horizontal-stretch: 1; }
+    if !plugin: JamHint { horizontal-stretch: 1; }
     if plugin: PluginPanel { deck: InstrumentsUi.instrument-deck(); horizontal-stretch: 1; }
 }
