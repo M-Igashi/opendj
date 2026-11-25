@@ -156,6 +156,7 @@ Released so far: v0.1.0 and v0.2.0 (2026-10-15, 2026-10-20) and v0.3.0 (prepared
 
 ## v2.0
 
+- [add-opendj-studio](changes/add-opendj-studio/proposal.md) (openDJ Studio, a separate clip-launching DAW app on openDJ's crates: a Session grid of MIDI clips launched in time over Ableton Link first, then plugin instruments, clip editing, warped audio clips, a shared transport crate and an Arrangement; issue #1009, a user request, 2026-11-23)
 - [add-audio-plugin-hosting](changes/add-audio-plugin-hosting/proposal.md)
 - [add-instrument-plugins](changes/add-instrument-plugins/proposal.md)
 - [add-cue-sequence-recording](changes/add-cue-sequence-recording/proposal.md) (moved from v0.6 on 2026-11-06)
